@@ -1,6 +1,6 @@
 """
 Главное окно программы "ООО Евроблок"
-[ИЗМЕНЕНО] Оптимизирована загрузка данных склада.
+[ИЗМЕНЕНО] Ускорено открытие окон разделов.
 """
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -101,7 +101,7 @@ class EuroblockApp:
         self.content_frame.pack(fill=tk.BOTH, expand=True, padx=PADDING['main'], pady=(0, PADDING['main']))
         
         self.left_panel = tk.Frame(
-            self.content_frame, bg=COLORS['panel_bg'], 
+            self.content_frame, bg=COLORS['panel_bg'],
             relief=tk.RAISED, bd=SIZES['panel_border']
         )
         self.left_panel.pack(side=tk.LEFT, fill=tk.Y, padx=(0, PADDING['main']))
@@ -165,7 +165,7 @@ class EuroblockApp:
         self.settings_btn.bind('<Leave>', lambda e: self.settings_btn.config(bg=COLORS['button_import']))
         
         self.work_area = tk.Frame(
-            self.content_frame, bg=COLORS['panel_bg'], 
+            self.content_frame, bg=COLORS['panel_bg'],
             relief=tk.RAISED, bd=SIZES['panel_border']
         )
         self.work_area.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -493,28 +493,78 @@ class EuroblockApp:
         new_stock_entry.focus_set()
         self.root.wait_window(dialog)
     
-    # [ОПТИМИЗИРОВАНО] Загрузка склада одним запросом
     def load_warehouse_data(self):
-        """
-        Загружает данные в таблицу "Склад".
-        [ОПТИМИЗИРОВАНО] Использует один запрос get_warehouse_summary()
-        вместо 5+ отдельных запросов.
-        """
         for item in self.warehouse_tree.get_children():
             self.warehouse_tree.delete(item)
         
-        # Один оптимизированный запрос вместо множества
-        summary = warehouse_repo.get_warehouse_summary()
+        records = production_repo.get_all()
+        all_products = products_repo.get_all()
+        volume_map = {row[0]: (row[1] if row[1] else 1) for row in all_products}
         
-        for item in summary:
+        stock_grouped = {}
+        for row in records:
+            product = row[4]
+            color = row[5] or ''
+            quantity = row[6] or 0
+            if not product:
+                continue
+            calc_qty = (quantity or 0) * volume_map.get(product, 1)
+            key = (product.strip(), color.strip())
+            stock_grouped[key] = stock_grouped.get(key, 0) + calc_qty
+        
+        adjustments = adjustment_repo.get_adjustments_sum()
+        for key, diff in adjustments.items():
+            stock_grouped[key] = stock_grouped.get(key, 0) + diff
+        
+        sold_from_reserve_sum = reserved_products_repo.get_sold_sum()
+        for key, sold_qty in sold_from_reserve_sum.items():
+            stock_grouped[key] = stock_grouped.get(key, 0) - sold_qty
+        
+        direct_sales_sum = sales_repo.get_sales_sum()
+        for key, sold_qty in direct_sales_sum.items():
+            stock_grouped[key] = stock_grouped.get(key, 0) - sold_qty
+        
+        reserved_records = reserved_products_repo.get_all_reserved()
+        reserved_grouped = {}
+        for row in reserved_records:
+            product = row[3] or ''
+            color = row[4] or ''
+            quantity = row[5] or 0
+            key = (product.strip(), color.strip())
+            reserved_grouped[key] = reserved_grouped.get(key, 0) + quantity
+        
+        all_keys = (set(stock_grouped.keys()) |
+                   set(reserved_grouped.keys()) |
+                   set(sold_from_reserve_sum.keys()) |
+                   set(direct_sales_sum.keys()) |
+                   set(adjustments.keys()))
+        
+        def sort_key(key):
+            product, color = key
+            has_brak = 1 if '(брак)' in product else 0
+            return (has_brak, product.lower(), color.lower())
+        
+        for key in sorted(all_keys, key=sort_key):
+            product, color = key
+            stock_qty = stock_grouped.get(key, 0)
+            reserved_qty = reserved_grouped.get(key, 0)
+            remaining_qty = stock_qty - reserved_qty
+            
+            has_activity = (key in sold_from_reserve_sum or
+                          key in direct_sales_sum or
+                          key in adjustments)
+            
+            if stock_qty == 0 and reserved_qty == 0 and not has_activity:
+                continue
+            
             self.warehouse_tree.insert(
                 '', 'end',
                 values=(
-                    item['product'],
-                    item['color'] if item['color'] else '—',
-                    self._format_number(item['stock_qty']),
-                    self._format_number(item['reserved_qty']),
-                    self._format_number(item['remaining_qty'])
+                    product,
+                    color if color else '—',
+                    self._format_number(stock_qty),
+                    self._format_number(reserved_qty),
+                    self._format_number(remaining_qty)
                 )
             )
     
@@ -576,6 +626,9 @@ class EuroblockApp:
         if section_name in all_windows:
             self.disable_main_buttons()
             window_class = all_windows[section_name]
+            # [НОВОЕ] Обновляем главное окно перед открытием дочернего
+            # Это гарантирует, что размеры родителя актуальны
+            self.root.update_idletasks()
             self.current_window = window_class(self.root, self.hide_current_window)
         else:
             self.clear_work_area()

@@ -1,6 +1,9 @@
 """
 Окно "Производство продукции" - учёт производства продукции
-[ИЗМЕНЕНО] Применена пагинация к журналу производства.
+[ИЗМЕНЕНО] 
+- Теперь наследуется от BaseToplevelWindow (единый механизм открытия)
+- Убрано мерцание при открытии
+- Адаптируется под любое разрешение экрана
 """
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -11,14 +14,12 @@ from database.repositories import (
 )
 from ui.widgets.date_entry import DateEntry
 from ui.widgets.combobox_autocomplete import AutocompleteCombobox
-from ui.widgets.paginated_treeview import PaginatedTreeview
+from ui.base_window import BaseToplevelWindow
 
 
-class ProductionWindow:
+class ProductionWindow(BaseToplevelWindow):
     """Окно учёта производства продукции"""
     def __init__(self, parent, on_exit_callback):
-        self.parent = parent
-        self.on_exit_callback = on_exit_callback
         self.equipment_list = [row[0] for row in equipment_repo.get_all()]
         self.silo_names = [row[0] for row in cement_silos_repo.get_all()]
         all_products = products_repo.get_all()
@@ -27,105 +28,76 @@ class ProductionWindow:
         self.editing_id = None
         self._editing_silo_name = None
         self._editing_cement_kg = None
-        
-        self.window = tk.Toplevel(parent)
-        self.window.title("Производство продукции")
-        self.window.configure(bg=COLORS['background'])
-        self.window.protocol("WM_DELETE_WINDOW", self._on_close)
-        self.window.transient(parent)
-        self._build_ui()
-        self.window.update_idletasks()
-        parent.update_idletasks()
-        parent_x = parent.winfo_x()
-        parent_y = parent.winfo_y()
-        parent_w = parent.winfo_width()
-        parent_h = parent.winfo_height()
-        self.window.geometry(f"{parent_w}x{parent_h}+{parent_x}+{parent_y}")
-        self.window.update_idletasks()
-        self.window.grab_set()
+        super().__init__(parent, on_exit_callback, title="Производство продукции")
     
     def _build_ui(self):
-        self.title_frame = tk.Frame(self.window, bg=COLORS['background'])
-        self.title_frame.pack(fill=tk.X, padx=PADDING['main'], pady=PADDING['main'])
-        self.title_label = tk.Label(
-            self.title_frame, text="Производство продукции",
-            font=FONTS['section_title'], bg=COLORS['background'], fg=COLORS['title_text']
-        )
-        self.title_label.pack(anchor='w')
-        self.separator = tk.Frame(self.title_frame, height=2, bg=COLORS['button_primary'])
-        self.separator.pack(fill=tk.X, pady=(10, 0))
-        
-        self.content_frame = tk.Frame(self.window, bg=COLORS['background'])
-        self.content_frame.pack(fill=tk.BOTH, expand=True, padx=PADDING['main'], pady=(0, PADDING['main']))
+        self.create_title_section(self.window, "Производство продукции")
+        content_frame = self.create_content_frame(self.window)
         
         # ===== ЛЕВАЯ ЧАСТЬ =====
-        self.left_frame = tk.Frame(
-            self.content_frame, bg=COLORS['panel_bg'],
-            relief=tk.RAISED, bd=SIZES['panel_border'], width=315
-        )
-        self.left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, PADDING['main']))
-        self.left_frame.pack_propagate(False)
+        left_inner = self.create_left_panel_with_scroll(content_frame, width=350)
         
-        self._create_field_label("Дата производства:")
-        self.date_entry = DateEntry(self.left_frame)
+        self.add_field_label(left_inner, "Дата производства:")
+        self.date_entry = DateEntry(left_inner)
         self.date_entry.pack(fill=tk.X, padx=10, pady=(0, 4))
         
-        self._create_field_label("Оборудование:")
-        self.equipment_combo = AutocompleteCombobox(self.left_frame, values=self.equipment_list)
+        self.add_field_label(left_inner, "Оборудование:")
+        self.equipment_combo = AutocompleteCombobox(left_inner, values=self.equipment_list)
         self.equipment_combo.pack(fill=tk.X, padx=10, pady=(0, 4))
         
-        self._create_field_label("Силос цемента:")
-        self.silo_combo = AutocompleteCombobox(self.left_frame, values=self.silo_names)
+        self.add_field_label(left_inner, "Силос цемента:")
+        self.silo_combo = AutocompleteCombobox(left_inner, values=self.silo_names)
         self.silo_combo.pack(fill=tk.X, padx=10, pady=(0, 4))
         
-        self._create_field_label("Цемент, кг:")
-        self.cement_entry = self._create_number_entry()
+        self.add_field_label(left_inner, "Цемент, кг:")
+        self.cement_entry = self._create_number_entry(left_inner)
         self.cement_entry.pack(fill=tk.X, padx=10, pady=(0, 3), ipady=SIZES['field_ipady'])
         
-        self._create_field_label("Обогащенный песок, кг:")
-        self.enriched_sand_entry = self._create_number_entry()
+        self.add_field_label(left_inner, "Обогащенный песок, кг:")
+        self.enriched_sand_entry = self._create_number_entry(left_inner)
         self.enriched_sand_entry.pack(fill=tk.X, padx=10, pady=(0, 3), ipady=SIZES['field_ipady'])
         
-        self._create_field_label("Речной песок, кг:")
-        self.river_sand_entry = self._create_number_entry()
+        self.add_field_label(left_inner, "Речной песок, кг:")
+        self.river_sand_entry = self._create_number_entry(left_inner)
         self.river_sand_entry.pack(fill=tk.X, padx=10, pady=(0, 3), ipady=SIZES['field_ipady'])
         
-        self._create_field_label("Керамзит, кг:")
-        self.keramzit_entry = self._create_number_entry()
+        self.add_field_label(left_inner, "Керамзит, кг:")
+        self.keramzit_entry = self._create_number_entry(left_inner)
         self.keramzit_entry.pack(fill=tk.X, padx=10, pady=(0, 3), ipady=SIZES['field_ipady'])
         
-        self._create_field_label("Пластификатор, кг:")
-        self.plasticizer_entry = self._create_number_entry()
+        self.add_field_label(left_inner, "Пластификатор, кг:")
+        self.plasticizer_entry = self._create_number_entry(left_inner)
         self.plasticizer_entry.pack(fill=tk.X, padx=10, pady=(0, 3), ipady=SIZES['field_ipady'])
         
-        self._create_field_label("Вода, кг:")
-        self.water_entry = self._create_number_entry()
+        self.add_field_label(left_inner, "Вода, кг:")
+        self.water_entry = self._create_number_entry(left_inner)
         self.water_entry.pack(fill=tk.X, padx=10, pady=(0, 4), ipady=SIZES['field_ipady'])
         
-        self._create_field_label("Продукция:")
-        self.product_combo = AutocompleteCombobox(self.left_frame, values=self.product_list)
+        self.add_field_label(left_inner, "Продукция:")
+        self.product_combo = AutocompleteCombobox(left_inner, values=self.product_list)
         self.product_combo.pack(fill=tk.X, padx=10, pady=(0, 4))
         self.product_combo.bind_text_change(self._on_product_change)
         
-        self._create_field_label("Цвет:")
-        self.color_combo = AutocompleteCombobox(self.left_frame, values=self.color_list)
+        self.add_field_label(left_inner, "Цвет:")
+        self.color_combo = AutocompleteCombobox(left_inner, values=self.color_list)
         self.color_combo.pack(fill=tk.X, padx=10, pady=(0, 4))
         
-        self._create_field_label("Количество, поддонов:")
-        self.quantity_entry = self._create_number_entry()
+        self.add_field_label(left_inner, "Количество, поддонов:")
+        self.quantity_entry = self._create_number_entry(left_inner)
         self.quantity_entry.pack(fill=tk.X, padx=10, pady=(0, 4), ipady=SIZES['field_ipady'])
         
-        self._create_field_label("Примечание:")
+        self.add_field_label(left_inner, "Примечание:")
         self.note_entry = tk.Entry(
-            self.left_frame, font=FONTS['field'], relief=tk.SOLID, bd=1, justify='left'
+            left_inner, font=FONTS['field'], relief=tk.SOLID, bd=1, justify='left'
         )
         self.note_entry.pack(fill=tk.X, padx=10, pady=(0, 6), ipady=SIZES['field_ipady'])
         
-        self.buttons_frame = tk.Frame(self.left_frame, bg=COLORS['panel_bg'])
-        self.buttons_frame.pack(fill=tk.X, side=tk.BOTTOM, padx=10, pady=10)
+        # Кнопки
+        buttons_frame = tk.Frame(left_inner, bg=COLORS['panel_bg'])
+        buttons_frame.pack(fill=tk.X, side=tk.BOTTOM, padx=10, pady=10)
         
         self.save_btn = tk.Button(
-            self.buttons_frame, text="Сохранить", font=FONTS['menu'],
+            buttons_frame, text="Сохранить", font=FONTS['menu'],
             command=self.save_production, bg=COLORS['button_primary'],
             fg=COLORS['button_text'], relief=tk.FLAT,
             padx=PADDING['button_x'], pady=PADDING['button_y'], cursor='hand2'
@@ -135,7 +107,7 @@ class ProductionWindow:
         self.save_btn.bind('<Leave>', lambda e: self._on_save_leave())
         
         self.edit_btn = tk.Button(
-            self.buttons_frame, text="Изменить", font=FONTS['menu'],
+            buttons_frame, text="Изменить", font=FONTS['menu'],
             command=self.edit_selected, bg='#f39c12', fg=COLORS['button_text'],
             relief=tk.FLAT, padx=PADDING['button_x'], pady=PADDING['button_y'], cursor='hand2'
         )
@@ -144,7 +116,7 @@ class ProductionWindow:
         self.edit_btn.bind('<Leave>', lambda e: self.edit_btn.config(bg='#f39c12'))
         
         self.delete_btn = tk.Button(
-            self.buttons_frame, text="Удалить", font=FONTS['menu'],
+            buttons_frame, text="Удалить", font=FONTS['menu'],
             command=self.delete_selected, bg='#e74c3c', fg=COLORS['button_text'],
             relief=tk.FLAT, padx=PADDING['button_x'], pady=PADDING['button_y'], cursor='hand2'
         )
@@ -153,7 +125,7 @@ class ProductionWindow:
         self.delete_btn.bind('<Leave>', lambda e: self.delete_btn.config(bg='#e74c3c'))
         
         self.exit_btn = tk.Button(
-            self.buttons_frame, text="Выход", font=FONTS['menu'],
+            buttons_frame, text="Выход", font=FONTS['menu'],
             command=self._on_close, bg=COLORS['button_settings'],
             fg=COLORS['button_text'], relief=tk.FLAT,
             padx=PADDING['button_x'], pady=PADDING['button_y'], cursor='hand2'
@@ -162,67 +134,72 @@ class ProductionWindow:
         self.exit_btn.bind('<Enter>', lambda e: self.exit_btn.config(bg=COLORS['button_settings_hover']))
         self.exit_btn.bind('<Leave>', lambda e: self.exit_btn.config(bg=COLORS['button_settings']))
         
-        # ===== ПРАВАЯ ЧАСТЬ С ПАГИНАЦИЕЙ =====
-        self.right_frame = tk.Frame(
-            self.content_frame, bg=COLORS['panel_bg'],
-            relief=tk.RAISED, bd=SIZES['panel_border']
-        )
-        self.right_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        # ===== ПРАВАЯ ЧАСТЬ =====
+        right_frame = self.create_right_panel(content_frame)
         
         tk.Label(
-            self.right_frame, text="Журнал производства продукции",
+            right_frame, text="Журнал производства продукции",
             font=FONTS['menu'], bg=COLORS['panel_bg'], fg=COLORS['title_text']
         ).pack(pady=(10, 5), anchor='w', padx=10)
         
-        # [НОВОЕ] Используем PaginatedTreeview
-        self.paginated_tree = PaginatedTreeview(
-            self.right_frame,
+        tree_container = tk.Frame(right_frame, bg=COLORS['panel_bg'])
+        tree_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        
+        scrollbar_y = ttk.Scrollbar(tree_container, orient=tk.VERTICAL)
+        scrollbar_y.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.tree = ttk.Treeview(
+            tree_container,
             columns=('date', 'equipment', 'product', 'color', 'quantity',
                      'cement', 'enriched_sand', 'plasticizer', 'river_sand',
                      'keramzit', 'water'),
-            headings={
-                'date': 'Дата', 'equipment': 'Оборудование',
-                'product': 'Продукция', 'color': 'Цвет',
-                'quantity': 'Кол-во, подд.', 'cement': 'Цемент, кг',
-                'enriched_sand': 'Обог. песок, кг', 'plasticizer': 'Пластиф., кг',
-                'river_sand': 'Речн. песок, кг', 'keramzit': 'Керамзит, кг',
-                'water': 'Вода, кг'
-            },
-            column_widths={
-                'date': 75, 'equipment': 100, 'product': 235,
-                'color': 80, 'quantity': 100, 'cement': 90,
-                'enriched_sand': 110, 'plasticizer': 110,
-                'river_sand': 110, 'keramzit': 90, 'water': 70
-            },
-            page_size=100,
-            load_callback=self._load_production_page
+            show='headings',
+            yscrollcommand=scrollbar_y.set,
+            selectmode='browse'
         )
-        self.paginated_tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        self.tree.heading('date', text='Дата', anchor='w')
+        self.tree.heading('equipment', text='Оборудование', anchor='w')
+        self.tree.heading('product', text='Продукция', anchor='w')
+        self.tree.heading('color', text='Цвет', anchor='w')
+        self.tree.heading('quantity', text='Кол-во, подд.', anchor='w')
+        self.tree.heading('cement', text='Цемент, кг', anchor='w')
+        self.tree.heading('enriched_sand', text='Обог. песок, кг', anchor='w')
+        self.tree.heading('plasticizer', text='Пластиф., кг', anchor='w')
+        self.tree.heading('river_sand', text='Речн. песок, кг', anchor='w')
+        self.tree.heading('keramzit', text='Керамзит, кг', anchor='w')
+        self.tree.heading('water', text='Вода, кг', anchor='w')
+        self.tree.column('date', width=75, anchor='w')
+        self.tree.column('equipment', width=100, anchor='w')
+        self.tree.column('product', width=235, anchor='w')
+        self.tree.column('color', width=80, anchor='w')
+        self.tree.column('quantity', width=100, anchor='w')
+        self.tree.column('cement', width=90, anchor='w')
+        self.tree.column('enriched_sand', width=110, anchor='w')
+        self.tree.column('plasticizer', width=110, anchor='w')
+        self.tree.column('river_sand', width=110, anchor='w')
+        self.tree.column('keramzit', width=90, anchor='w')
+        self.tree.column('water', width=70, anchor='w')
+        scrollbar_y.config(command=self.tree.yview)
+        self.tree.pack(fill=tk.BOTH, expand=True)
         
-        # Двойной клик для информации о расходе цемента
-        self.paginated_tree.bind_double_click(self._on_tree_double_click)
+        self.tree.bind('<Double-Button-1>', self._on_tree_double_click)
         
-        self.paginated_tree.load_page(0)
+        self.load_production()
     
-    def _load_production_page(self, page, page_size):
-        """Callback для загрузки страницы производства"""
-        rows, total = production_repo.get_all_paged(page, page_size)
-        daily_cement = production_repo.get_daily_cement_totals()
-        formatted_rows = []
-        for row in rows:
-            (prod_id, date, equipment, silo, product, color, quantity,
-             cement, enriched_sand, river_sand, keramzit, plasticizer, water, note) = row
-            if not product:
-                continue
-            cement_total = daily_cement.get(date, 0)
-            formatted_rows.append((
-                date, equipment or '—', product, color or '—',
-                self._format_number(quantity), self._format_number(cement_total),
-                self._format_number(enriched_sand), self._format_number(plasticizer),
-                self._format_number(river_sand), self._format_number(keramzit),
-                self._format_number(water)
-            ))
-        return formatted_rows, total
+    def _create_number_entry(self, parent):
+        entry = tk.Entry(
+            parent, font=FONTS['field'], relief=tk.SOLID, bd=1, justify='left'
+        )
+        entry.bind('<KeyRelease>', self._validate_number)
+        return entry
+    
+    def _validate_number(self, event=None):
+        widget = event.widget
+        value = widget.get()
+        filtered = ''.join(c for c in value if c.isdigit() or c in '-.,')
+        if filtered != value:
+            widget.delete(0, tk.END)
+            widget.insert(0, filtered)
     
     def _on_product_change(self):
         product = self.product_combo.get().strip().lower()
@@ -233,11 +210,13 @@ class ProductionWindow:
             self.color_combo.clear()
     
     def _on_tree_double_click(self, event):
-        """Обработчик двойного клика — показывает информацию о расходе цемента за день"""
-        values = self.paginated_tree.get_selection()
-        if not values:
+        item_id = self.tree.identify_row(event.y)
+        if not item_id:
             return
-        date_str = values[0]
+        item_values = self.tree.item(item_id, 'values')
+        if not item_values:
+            return
+        date_str = item_values[0]
         self._show_cement_info_dialog(date_str)
     
     def _show_cement_info_dialog(self, date_str):
@@ -249,6 +228,7 @@ class ProductionWindow:
         dialog.transient(self.window)
         dialog.grab_set()
         dialog.update_idletasks()
+        
         dialog_width = 400
         dialog_height = 300 if consumption else 200
         parent_x = self.window.winfo_rootx()
@@ -263,6 +243,7 @@ class ProductionWindow:
             dialog, text=f"Дата: {date_str}",
             font=FONTS['section_title'], bg=COLORS['panel_bg'], fg=COLORS['title_text']
         ).pack(pady=(15, 10))
+        
         tk.Frame(dialog, height=2, bg=COLORS['button_primary']).pack(fill=tk.X, padx=20, pady=(0, 10))
         
         if not consumption:
@@ -275,8 +256,10 @@ class ProductionWindow:
                 dialog, text="Расход цемента по силосам:",
                 font=FONTS['menu'], bg=COLORS['panel_bg'], fg=COLORS['title_text']
             ).pack(pady=(0, 5))
+            
             list_frame = tk.Frame(dialog, bg=COLORS['panel_bg'])
             list_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 10))
+            
             total = 0
             for silo_name, cement_kg in consumption:
                 cement_display = self._format_number(cement_kg)
@@ -285,6 +268,7 @@ class ProductionWindow:
                     font=FONTS['menu'], bg=COLORS['panel_bg'], fg=COLORS['title_text'], anchor='w'
                 ).pack(fill=tk.X, pady=2)
                 total += cement_kg or 0
+            
             tk.Frame(dialog, height=1, bg=COLORS['work_area_text']).pack(fill=tk.X, padx=20, pady=5)
             tk.Label(
                 dialog, text=f"ИТОГО за день: {self._format_number(total)} кг",
@@ -319,11 +303,13 @@ class ProductionWindow:
         close_btn.pack(side=tk.RIGHT)
         close_btn.bind('<Enter>', lambda e: close_btn.config(bg=COLORS['button_settings_hover']))
         close_btn.bind('<Leave>', lambda e: close_btn.config(bg=COLORS['button_settings']))
+        
         dialog.bind('<Escape>', lambda e: on_close())
     
     def _show_cement_edit_dialog(self, date_str):
         consumption = production_repo.get_cement_consumption_by_date(date_str)
         current_consumption = {silo_name: cement_kg for silo_name, cement_kg in consumption}
+        
         dialog = tk.Toplevel(self.window)
         dialog.title("Редактирование расхода цемента")
         dialog.configure(bg=COLORS['panel_bg'])
@@ -331,6 +317,7 @@ class ProductionWindow:
         dialog.transient(self.window)
         dialog.grab_set()
         dialog.update_idletasks()
+        
         dialog_width = 450
         dialog_height = 400
         parent_x = self.window.winfo_rootx()
@@ -345,7 +332,9 @@ class ProductionWindow:
             dialog, text=f"Дата: {date_str}",
             font=FONTS['section_title'], bg=COLORS['panel_bg'], fg=COLORS['title_text']
         ).pack(pady=(15, 10))
+        
         tk.Frame(dialog, height=2, bg=COLORS['button_primary']).pack(fill=tk.X, padx=20, pady=(0, 10))
+        
         tk.Label(
             dialog, text="Расход цемента по силосам (кг):",
             font=FONTS['menu'], bg=COLORS['panel_bg'], fg=COLORS['title_text']
@@ -353,6 +342,7 @@ class ProductionWindow:
         
         fields_frame = tk.Frame(dialog, bg=COLORS['panel_bg'])
         fields_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 10))
+        
         entry_vars = {}
         for silo_name in self.silo_names:
             row_frame = tk.Frame(fields_frame, bg=COLORS['panel_bg'])
@@ -361,20 +351,24 @@ class ProductionWindow:
                 row_frame, text=f"{silo_name}:", font=FONTS['field'],
                 bg=COLORS['panel_bg'], fg=COLORS['title_text'], width=20, anchor='w'
             ).pack(side=tk.LEFT, padx=(0, 10))
+            
             var = tk.StringVar()
             current_value = current_consumption.get(silo_name, 0)
             var.set(self._format_number(current_value) if current_value else '0')
+            
             entry = tk.Entry(
                 row_frame, textvariable=var, font=FONTS['field'],
                 width=15, relief=tk.SOLID, bd=1, justify='left'
             )
             entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            
             def validate_input(event, entry_widget=entry):
                 value = entry_widget.get()
                 filtered = ''.join(c for c in value if c.isdigit() or c in '.,')
                 if filtered != value:
                     entry_widget.delete(0, tk.END)
                     entry_widget.insert(0, filtered)
+            
             entry.bind('<KeyRelease>', validate_input)
             entry_vars[silo_name] = var
         
@@ -391,7 +385,7 @@ class ProductionWindow:
             if success:
                 messagebox.showinfo("Успех", message)
                 dialog.destroy()
-                self.paginated_tree.refresh()
+                self.load_production()
                 self._show_cement_info_dialog(date_str)
             else:
                 messagebox.showerror("Ошибка", message)
@@ -417,38 +411,8 @@ class ProductionWindow:
         cancel_btn.pack(side=tk.RIGHT)
         cancel_btn.bind('<Enter>', lambda e: cancel_btn.config(bg=COLORS['button_settings_hover']))
         cancel_btn.bind('<Leave>', lambda e: cancel_btn.config(bg=COLORS['button_settings']))
+        
         dialog.bind('<Escape>', lambda e: on_cancel())
-    
-    def _on_close(self):
-        self.window.grab_release()
-        self.window.destroy()
-        if self.on_exit_callback:
-            self.on_exit_callback()
-    
-    def get_frame(self):
-        return self.window
-    
-    def _create_field_label(self, text):
-        lbl = tk.Label(
-            self.left_frame, text=text, font=FONTS['field'],
-            bg=COLORS['panel_bg'], fg=COLORS['title_text']
-        )
-        lbl.pack(anchor='w', padx=10, pady=(2, 1))
-    
-    def _create_number_entry(self):
-        entry = tk.Entry(
-            self.left_frame, font=FONTS['field'], relief=tk.SOLID, bd=1, justify='left'
-        )
-        entry.bind('<KeyRelease>', self._validate_number)
-        return entry
-    
-    def _validate_number(self, event=None):
-        widget = event.widget
-        value = widget.get()
-        filtered = ''.join(c for c in value if c.isdigit() or c in '-.,')
-        if filtered != value:
-            widget.delete(0, tk.END)
-            widget.insert(0, filtered)
     
     def _on_save_enter(self):
         if self.editing_id:
@@ -474,30 +438,38 @@ class ProductionWindow:
         except (ValueError, TypeError):
             return str(value)
     
+    def load_production(self):
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        records = production_repo.get_all()
+        daily_cement = production_repo.get_daily_cement_totals()
+        for row in records:
+            (prod_id, date, equipment, silo, product, color, quantity,
+             cement, enriched_sand, river_sand, keramzit, plasticizer, water, note) = row
+            if not product:
+                continue
+            cement_total = daily_cement.get(date, 0)
+            self.tree.insert(
+                '', 'end', iid=str(prod_id),
+                values=(
+                    date, equipment or '—', product, color or '—',
+                    self._format_number(quantity), self._format_number(cement_total),
+                    self._format_number(enriched_sand), self._format_number(plasticizer),
+                    self._format_number(river_sand), self._format_number(keramzit),
+                    self._format_number(water)
+                )
+            )
+    
     def edit_selected(self):
-        values = self.paginated_tree.get_selection()
-        if not values:
+        selected = self.tree.selection()
+        if not selected:
             messagebox.showwarning("Внимание", "Выберите запись для редактирования")
             return
-        
-        # Получаем ID через iid (первая колонка — дата, нужно найти prod_id)
-        selected_iid = self.paginated_tree.get_selected_iid()
-        if not selected_iid:
-            return
-        
-        # Получаем запись из БД по дате (первое поле)
-        date_str = values[0]
-        all_records = production_repo.get_all()
-        record = None
-        for r in all_records:
-            if str(r[0]) == selected_iid:
-                record = r
-                break
-        
+        prod_id = int(selected[0])
+        record = production_repo.get_by_id(prod_id)
         if not record:
             messagebox.showerror("Ошибка", "Запись не найдена")
             return
-        
         (prod_id, date, equipment, silo, product, color, quantity,
          cement, enriched_sand, river_sand, keramzit, plasticizer, water, note) = record
         
@@ -575,7 +547,7 @@ class ProductionWindow:
         if success:
             messagebox.showinfo("Успех", message)
             self._clear_fields()
-            self.paginated_tree.refresh()
+            self.load_production()
         else:
             messagebox.showerror("Ошибка", message)
     
@@ -602,16 +574,17 @@ class ProductionWindow:
         self.save_btn.config(text="Сохранить")
     
     def delete_selected(self):
-        values = self.paginated_tree.get_selection()
-        if not values:
+        selected = self.tree.selection()
+        if not selected:
             messagebox.showwarning("Внимание", "Выберите запись для удаления")
             return
-        
-        date_str = values[0]
+        item_values = self.tree.item(selected[0], 'values')
+        if not item_values:
+            return
+        date_str = item_values[0]
         all_records = production_repo.get_all()
         records_for_date = [r for r in all_records if r[1] == date_str]
         count = len(records_for_date)
-        
         if not messagebox.askyesno(
             "Подтверждение",
             f"Удалить ВСЕ записи за {date_str}?\n\n"
@@ -619,14 +592,13 @@ class ProductionWindow:
             f"(включая расход цемента из других силосов за этот день)"
         ):
             return
-        
         success, message = production_repo.delete_by_date(date_str)
         if success:
             if self.editing_id:
                 editing_record = production_repo.get_by_id(self.editing_id)
                 if not editing_record:
                     self._clear_fields()
-            self.paginated_tree.refresh()
+            self.load_production()
             messagebox.showinfo("Успех", message)
         else:
             messagebox.showerror("Ошибка", message)

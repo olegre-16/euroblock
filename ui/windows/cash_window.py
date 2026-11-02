@@ -1,6 +1,6 @@
 """
 Окно "Касса" - учёт кассовых операций
-Оформление идентично окну "Производство продукции".
+[ИЗМЕНЕНО] Кнопки "Сохранить" и "Удалить" теперь той же ширины, что и "Выход".
 """
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -13,7 +13,6 @@ from ui.base_window import BaseToplevelWindow
 
 class CashWindow(BaseToplevelWindow):
     """Окно учёта кассовых операций"""
-    
     def __init__(self, parent, on_exit_callback):
         self.editing_id = None
         super().__init__(parent, on_exit_callback, title="Касса")
@@ -43,9 +42,9 @@ class CashWindow(BaseToplevelWindow):
         self.expense_entry.pack(fill=tk.X, padx=10, pady=(0, 8), ipady=SIZES['field_ipady'])
         self.expense_entry.bind('<KeyRelease>', self._validate_number)
         
-        # Кнопки
+        # [ИЗМЕНЕНО] Убран padx=10 у buttons_frame
         buttons_frame = tk.Frame(left_inner, bg=COLORS['panel_bg'])
-        buttons_frame.pack(fill=tk.X, padx=10, pady=(10, 5))
+        buttons_frame.pack(fill=tk.X, padx=0, pady=(10, 5))
         
         self.save_btn = self.add_button(buttons_frame, "Сохранить", self.save_operation,
                                         color=COLORS['button_primary'])
@@ -59,7 +58,6 @@ class CashWindow(BaseToplevelWindow):
         
         # Правая часть
         right_frame = self.create_right_panel(content_frame)
-        
         tk.Label(
             right_frame, text="Журнал кассовых операций",
             font=FONTS['menu'], bg=COLORS['panel_bg'], fg=COLORS['title_text']
@@ -78,15 +76,12 @@ class CashWindow(BaseToplevelWindow):
             yscrollcommand=scrollbar_y.set,
             selectmode='browse'
         )
-        
         self.tree.heading('date', text='Дата', anchor='w')
         self.tree.heading('income', text='Приход, руб.', anchor='w')
         self.tree.heading('expense', text='Расход, руб.', anchor='w')
-        
         self.tree.column('date', width=150, anchor='w')
         self.tree.column('income', width=200, anchor='w')
         self.tree.column('expense', width=200, anchor='w')
-        
         scrollbar_y.config(command=self.tree.yview)
         self.tree.pack(fill=tk.BOTH, expand=True)
         
@@ -133,7 +128,6 @@ class CashWindow(BaseToplevelWindow):
             return
         
         date_str = values[0]
-        
         if item_id.startswith('total_'):
             date_str = item_id[6:]
         elif item_id.startswith('turnover_'):
@@ -186,7 +180,6 @@ class CashWindow(BaseToplevelWindow):
         if not date_str:
             messagebox.showwarning("Внимание", "Укажите дату")
             return
-        
         try:
             datetime.strptime(date_str, '%d.%m.%Y')
         except ValueError:
@@ -210,7 +203,6 @@ class CashWindow(BaseToplevelWindow):
             return
         
         success, message = cash_repo.add(date_str, income, expense)
-        
         if success:
             self.income_entry.delete(0, tk.END)
             self.expense_entry.delete(0, tk.END)
@@ -224,7 +216,6 @@ class CashWindow(BaseToplevelWindow):
             self.tree.delete(item)
         
         operations = cash_repo.get_all()
-        
         grouped_by_date = {}
         for op_id, date, income, expense in operations:
             if date not in grouped_by_date:
@@ -242,14 +233,12 @@ class CashWindow(BaseToplevelWindow):
             return 0
         
         sorted_dates = sorted(grouped_by_date.keys(), 
-                             key=lambda d: date_to_comparable(d), reverse=True)
+                              key=lambda d: date_to_comparable(d), reverse=True)
         
         for date in sorted_dates:
             ops = grouped_by_date[date]
-            
             incomes = []
             expenses = []
-            
             for op_id, inc, exp in ops:
                 if inc and inc > 0:
                     incomes.append({'id': op_id, 'value': inc})
@@ -262,17 +251,14 @@ class CashWindow(BaseToplevelWindow):
             
             for i in range(num_rows):
                 date_display = date if i == 0 else ''
-                
                 inc_val = ''
                 if i < len(incomes):
                     inc_val = self._format_money(incomes[i]['value'])
-                
                 exp_val = ''
                 if i < len(expenses):
                     exp_val = self._format_money(expenses[i]['value'])
                 
                 row_iid = f"row__{date}__{i}"
-                
                 self.tree.insert(
                     '', 'end', iid=row_iid,
                     values=(date_display, inc_val, exp_val)
@@ -300,7 +286,6 @@ class CashWindow(BaseToplevelWindow):
             return
         
         item_id = selected[0]
-        
         if item_id.startswith('total_') or item_id.startswith('turnover_'):
             messagebox.showwarning(
                 "Внимание",
@@ -319,7 +304,6 @@ class CashWindow(BaseToplevelWindow):
         
         income_val_str = values[1]
         expense_val_str = values[2]
-        
         inc_float = self._parse_money(income_val_str)
         exp_float = self._parse_money(expense_val_str)
         
@@ -331,7 +315,6 @@ class CashWindow(BaseToplevelWindow):
             return
         
         target_type = None
-        
         if has_income and has_expense:
             target_type = self._ask_what_to_delete(income_val_str, expense_val_str)
             if target_type is None:
@@ -346,7 +329,6 @@ class CashWindow(BaseToplevelWindow):
         
         target_op_id = None
         target_desc = ""
-        
         if target_type == 'income':
             for op in day_ops:
                 if op[2] and abs(op[2] - inc_float) < 0.01:
@@ -371,7 +353,6 @@ class CashWindow(BaseToplevelWindow):
             return
         
         success, message = cash_repo.clear_field(target_op_id, target_type)
-        
         if success:
             self.load_operations()
             messagebox.showinfo("Успех", message)
@@ -397,14 +378,12 @@ class CashWindow(BaseToplevelWindow):
         
         dialog_width = 400
         dialog_height = 260
-        
         root_window = self.window.winfo_toplevel()
         root_window.update_idletasks()
         root_x = root_window.winfo_rootx()
         root_y = root_window.winfo_rooty()
         root_w = root_window.winfo_width()
         root_h = root_window.winfo_height()
-        
         x = root_x + (root_w - dialog_width) // 2
         y = root_y + (root_h - dialog_height) // 2
         dialog.geometry(f"{dialog_width}x{dialog_height}+{x}+{y}")
@@ -495,7 +474,5 @@ class CashWindow(BaseToplevelWindow):
         cancel_btn.bind('<Leave>', lambda e: cancel_btn.config(bg=COLORS['button_settings']))
         
         dialog.bind('<Escape>', lambda e: on_cancel())
-        
         self.window.wait_window(dialog)
-        
         return result['choice']

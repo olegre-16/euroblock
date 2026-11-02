@@ -1,6 +1,6 @@
 """
 Окно "Реализация продукции" - учёт продаж продукции
-[ИЗМЕНЕНО] Добавлена пагинация через PaginatedTreeview.
+[ИЗМЕНЕНО] Кнопки "Сохранить", "Изменить", "Удалить" теперь той же ширины, что и "Выход".
 """
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -11,11 +11,11 @@ from database.repositories import (
 )
 from ui.widgets.date_entry import DateEntry
 from ui.widgets.combobox_autocomplete import AutocompleteCombobox
-from ui.widgets.paginated_treeview import PaginatedTreeview
 from ui.base_window import BaseToplevelWindow
 
 
 class SalesWindow(BaseToplevelWindow):
+    """Окно учёта реализации продукции"""
     def __init__(self, parent, on_exit_callback):
         all_products = products_repo.get_all()
         self.product_list = [row[0] for row in all_products]
@@ -60,8 +60,9 @@ class SalesWindow(BaseToplevelWindow):
         self.price_entry.pack(fill=tk.X, padx=10, pady=(0, 8), ipady=SIZES['field_ipady'])
         self.price_entry.bind('<KeyRelease>', self._validate_number)
         
+        # [ИЗМЕНЕНО] Убран padx=10 у buttons_frame
         buttons_frame = tk.Frame(left_inner, bg=COLORS['panel_bg'])
-        buttons_frame.pack(fill=tk.X, padx=10, pady=(10, 5))
+        buttons_frame.pack(fill=tk.X, padx=0, pady=(10, 5))
         
         self.save_btn = self.add_button(buttons_frame, "Сохранить", self.save_sale, 
                                         color=COLORS['button_primary'])
@@ -76,51 +77,44 @@ class SalesWindow(BaseToplevelWindow):
         self.exit_btn = self.add_button(left_inner, "Выход", self._on_close,
                                         color=COLORS['button_settings'], side=tk.BOTTOM)
         
-        # ===== ПРАВАЯ ЧАСТЬ С ПАГИНАЦИЕЙ =====
+        # ===== ПРАВАЯ ЧАСТЬ =====
         right_frame = self.create_right_panel(content_frame)
         tk.Label(
             right_frame, text="Журнал реализации продукции",
             font=FONTS['menu'], bg=COLORS['panel_bg'], fg=COLORS['title_text']
         ).pack(pady=(10, 5), anchor='w', padx=10)
         
-        # Используем PaginatedTreeview вместо обычного Treeview
-        self.paginated_tree = PaginatedTreeview(
-            right_frame,
-            columns=('date', 'equipment', 'product', 'color', 'quantity', 'price', 'total'),
-            headings={
-                'date': 'Дата', 'equipment': 'Оборудование',
-                'product': 'Продукция', 'color': 'Цвет',
-                'quantity': 'Кол-во, шт/м2', 'price': 'Цена, руб.',
-                'total': 'Сумма, руб.'
-            },
-            column_widths={
-                'date': 90, 'equipment': 120, 'product': 200,
-                'color': 90, 'quantity': 110, 'price': 110, 'total': 120
-            },
-            page_size=100,
-            load_callback=self._load_sales_page
-        )
-        self.paginated_tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        tree_container = tk.Frame(right_frame, bg=COLORS['panel_bg'])
+        tree_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
         
-        self.paginated_tree.load_page(0)
-    
-    def _load_sales_page(self, page, page_size):
-        """Callback для загрузки страницы продаж"""
-        rows, total = sales_repo.get_all_paged(page, page_size)
-        formatted_rows = []
-        for row in rows:
-            if len(row) == 7:
-                sale_id, date, product, color, quantity, price, equipment = row
-            else:
-                sale_id, date, product, color, quantity, price = row
-                equipment = ''
-            total_amount = (quantity or 0) * (price or 0)
-            formatted_rows.append((
-                date, equipment or '—', product, color or '—',
-                self._format_number(quantity), self._format_number(price),
-                self._format_number(total_amount)
-            ))
-        return formatted_rows, total
+        scrollbar_y = ttk.Scrollbar(tree_container, orient=tk.VERTICAL)
+        scrollbar_y.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.tree = ttk.Treeview(
+            tree_container,
+            columns=('date', 'equipment', 'product', 'color', 'quantity', 'price', 'total'),
+            show='headings',
+            yscrollcommand=scrollbar_y.set,
+            selectmode='browse'
+        )
+        self.tree.heading('date', text='Дата', anchor='w')
+        self.tree.heading('equipment', text='Оборудование', anchor='w')
+        self.tree.heading('product', text='Продукция', anchor='w')
+        self.tree.heading('color', text='Цвет', anchor='w')
+        self.tree.heading('quantity', text='Кол-во, шт/м2', anchor='w')
+        self.tree.heading('price', text='Цена, руб.', anchor='w')
+        self.tree.heading('total', text='Сумма, руб.', anchor='w')
+        self.tree.column('date', width=90, anchor='w')
+        self.tree.column('equipment', width=120, anchor='w')
+        self.tree.column('product', width=200, anchor='w')
+        self.tree.column('color', width=90, anchor='w')
+        self.tree.column('quantity', width=110, anchor='w')
+        self.tree.column('price', width=110, anchor='w')
+        self.tree.column('total', width=120, anchor='w')
+        scrollbar_y.config(command=self.tree.yview)
+        self.tree.pack(fill=tk.BOTH, expand=True)
+        
+        self.load_sales()
     
     def _on_product_change(self):
         product = self.product_combo.get().strip().lower()
@@ -153,6 +147,24 @@ class SalesWindow(BaseToplevelWindow):
         else:
             self.save_btn.config(bg=COLORS['button_primary'])
     
+    def load_sales(self):
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        sales = sales_repo.get_all()
+        for row in sales:
+            if len(row) == 7:
+                sale_id, date, product, color, quantity, price, equipment = row
+            else:
+                sale_id, date, product, color, quantity, price = row
+                equipment = ''
+            total = (quantity or 0) * (price or 0)
+            self.tree.insert(
+                '', 'end', iid=str(sale_id),
+                values=(date, equipment or '—', product, color or '—',
+                        self._format_number(quantity), self._format_number(price),
+                        self._format_number(total))
+            )
+    
     def _format_number(self, value):
         if value is None or value == '':
             return '0'
@@ -166,11 +178,11 @@ class SalesWindow(BaseToplevelWindow):
             return str(value)
     
     def edit_selected(self):
-        selected_iid = self.paginated_tree.get_selected_iid()
-        if not selected_iid:
+        selected = self.tree.selection()
+        if not selected:
             messagebox.showwarning("Внимание", "Выберите запись для редактирования")
             return
-        sale_id = int(selected_iid)
+        sale_id = int(selected[0])
         sale = sales_repo.get_by_id(sale_id)
         if not sale:
             messagebox.showerror("Ошибка", "Запись не найдена")
@@ -180,7 +192,6 @@ class SalesWindow(BaseToplevelWindow):
         else:
             _, date, product, color, quantity, price = sale
             equipment = ''
-        
         self.date_entry.set_date(date)
         self.equipment_combo.set(equipment or '')
         self.color_combo.set(color or '')
@@ -240,17 +251,17 @@ class SalesWindow(BaseToplevelWindow):
             if self.editing_sale_id:
                 self.editing_sale_id = None
                 self.save_btn.config(text="Сохранить")
-            self.paginated_tree.refresh()
+            self.load_sales()
             self.product_combo.focus_set()
         else:
             messagebox.showerror("Ошибка", message)
     
     def delete_selected(self):
-        selected_iid = self.paginated_tree.get_selected_iid()
-        if not selected_iid:
+        selected = self.tree.selection()
+        if not selected:
             messagebox.showwarning("Внимание", "Выберите запись для удаления")
             return
-        sale_id = int(selected_iid)
+        sale_id = int(selected[0])
         sale = sales_repo.get_by_id(sale_id)
         if not sale:
             messagebox.showerror("Ошибка", "Запись не найдена")
@@ -261,7 +272,6 @@ class SalesWindow(BaseToplevelWindow):
             _, date, product, color, quantity, price = sale
             equipment = ''
         total = (quantity or 0) * (price or 0)
-        
         if not messagebox.askyesno(
             "Подтверждение",
             f"Удалить запись о продаже?\n\n"
@@ -269,13 +279,12 @@ class SalesWindow(BaseToplevelWindow):
             f"Сумма: {self._format_number(total)} руб."
         ):
             return
-        
         success, message = sales_repo.delete(sale_id)
         if success:
             if self.editing_sale_id == sale_id:
                 self.editing_sale_id = None
                 self.save_btn.config(text="Сохранить")
-            self.paginated_tree.refresh()
+            self.load_sales()
             messagebox.showinfo("Успех", message)
         else:
             messagebox.showerror("Ошибка", message)

@@ -1,6 +1,6 @@
 """
 Окно "Расходы общие" - учёт общих расходов
-[ИЗМЕНЕНО] Применена пагинация к журналу расходов.
+[ИЗМЕНЕНО] Кнопки "Сохранить", "Изменить", "Удалить" теперь той же ширины, что и "Выход".
 """
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -12,7 +12,6 @@ from database.repositories import (
 )
 from ui.widgets.date_entry import DateEntry
 from ui.widgets.combobox_autocomplete import AutocompleteCombobox
-from ui.widgets.paginated_treeview import PaginatedTreeview
 from ui.base_window import BaseToplevelWindow
 
 
@@ -70,8 +69,9 @@ class GeneralExpensesWindow(BaseToplevelWindow):
         )
         self.comment_entry.pack(fill=tk.X, padx=10, pady=(0, 8), ipady=SIZES['field_ipady'])
         
+        # [ИЗМЕНЕНО] Убран padx=10 у buttons_frame
         buttons_frame = tk.Frame(left_inner, bg=COLORS['panel_bg'])
-        buttons_frame.pack(fill=tk.X, padx=10, pady=(10, 5))
+        buttons_frame.pack(fill=tk.X, padx=0, pady=(10, 5))
         
         self.save_btn = self.add_button(buttons_frame, "Сохранить", self.save_expense,
                                         color=COLORS['button_primary'])
@@ -86,52 +86,51 @@ class GeneralExpensesWindow(BaseToplevelWindow):
         self.exit_btn = self.add_button(left_inner, "Выход", self._on_close,
                                         color=COLORS['button_settings'], side=tk.BOTTOM)
         
-        # ===== ПРАВАЯ ЧАСТЬ С ПАГИНАЦИЕЙ =====
+        # ===== ПРАВАЯ ЧАСТЬ =====
         right_frame = self.create_right_panel(content_frame)
         tk.Label(
             right_frame, text="Журнал общих расходов",
             font=FONTS['menu'], bg=COLORS['panel_bg'], fg=COLORS['title_text']
         ).pack(pady=(10, 5), anchor='w', padx=10)
         
-        self.paginated_tree = PaginatedTreeview(
-            right_frame,
+        tree_container = tk.Frame(right_frame, bg=COLORS['panel_bg'])
+        tree_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        
+        scrollbar_y = ttk.Scrollbar(tree_container, orient=tk.VERTICAL)
+        scrollbar_y.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.tree = ttk.Treeview(
+            tree_container,
             columns=('date', 'supplier', 'material', 'quantity', 'price', 'total',
                      'payer', 'payment_type', 'purpose', 'comment'),
-            headings={
-                'date': 'Дата', 'supplier': 'Поставщик',
-                'material': 'Материалы и услуги', 'quantity': 'Кол-во',
-                'price': 'Цена, руб', 'total': 'Сумма, руб',
-                'payer': 'Плательщик', 'payment_type': 'Вид оплаты',
-                'purpose': 'Назначение', 'comment': 'Комментарии'
-            },
-            column_widths={
-                'date': 80, 'supplier': 150, 'material': 180,
-                'quantity': 60, 'price': 80, 'total': 90,
-                'payer': 150, 'payment_type': 150, 'purpose': 150, 'comment': 230
-            },
-            page_size=100,
-            load_callback=self._load_expenses_page
+            show='headings',
+            yscrollcommand=scrollbar_y.set,
+            selectmode='browse'
         )
-        self.paginated_tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
-        self.paginated_tree.load_page(0)
-    
-    def _load_expenses_page(self, page, page_size):
-        """Callback для загрузки страницы расходов"""
-        rows, total = general_expenses_repo.get_all_paged(page, page_size)
-        formatted_rows = []
-        for row in rows:
-            (expense_id, date, supplier, material, quantity, price,
-             payer, payment_type, purpose, comment) = row
-            qty = quantity or 0
-            prc = price or 0
-            total = qty * prc
-            formatted_rows.append((
-                date, supplier or '—', material or '—',
-                self._format_number(quantity), self._format_number(price),
-                self._format_number(total), payer or '—',
-                payment_type or '—', purpose or '—', comment or '—'
-            ))
-        return formatted_rows, total
+        self.tree.heading('date', text='Дата', anchor='w')
+        self.tree.heading('supplier', text='Поставщик', anchor='w')
+        self.tree.heading('material', text='Материалы и услуги', anchor='w')
+        self.tree.heading('quantity', text='Кол-во', anchor='w')
+        self.tree.heading('price', text='Цена, руб', anchor='w')
+        self.tree.heading('total', text='Сумма, руб', anchor='w')
+        self.tree.heading('payer', text='Плательщик', anchor='w')
+        self.tree.heading('payment_type', text='Вид оплаты', anchor='w')
+        self.tree.heading('purpose', text='Назначение', anchor='w')
+        self.tree.heading('comment', text='Комментарии', anchor='w')
+        self.tree.column('date', width=80, anchor='w')
+        self.tree.column('supplier', width=150, anchor='w')
+        self.tree.column('material', width=180, anchor='w')
+        self.tree.column('quantity', width=60, anchor='w')
+        self.tree.column('price', width=80, anchor='w')
+        self.tree.column('total', width=90, anchor='w')
+        self.tree.column('payer', width=150, anchor='w')
+        self.tree.column('payment_type', width=150, anchor='w')
+        self.tree.column('purpose', width=150, anchor='w')
+        self.tree.column('comment', width=230, anchor='w')
+        scrollbar_y.config(command=self.tree.yview)
+        self.tree.pack(fill=tk.BOTH, expand=True)
+        
+        self.load_expenses()
     
     def _create_number_entry(self, parent):
         entry = tk.Entry(
@@ -143,7 +142,10 @@ class GeneralExpensesWindow(BaseToplevelWindow):
     def _validate_number(self, event=None):
         widget = event.widget
         value = widget.get()
-        filtered = ''.join(c for c in value if c.isdigit() or c in '-.,')
+        filtered = ''
+        for char in value:
+            if char.isdigit() or char in '-.,':
+                filtered += char
         if filtered != value:
             widget.delete(0, tk.END)
             widget.insert(0, filtered)
@@ -172,21 +174,53 @@ class GeneralExpensesWindow(BaseToplevelWindow):
         except (ValueError, TypeError):
             return str(value)
     
+    def load_expenses(self):
+        # Сохраняем выбранную запись, чтобы восстановить выбор после перезагрузки
+        selected_item = self.tree.selection()
+        selected_id = None
+        if selected_item:
+            try:
+                selected_id = int(selected_item[0])
+            except (ValueError, IndexError):
+                selected_id = None
+        
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        
+        records = general_expenses_repo.get_all()
+        for row in records:
+            (expense_id, date, supplier, material, quantity, price,
+             payer, payment_type, purpose, comment) = row
+            qty = quantity or 0
+            prc = price or 0
+            total = qty * prc
+            self.tree.insert(
+                '', 'end', iid=str(expense_id),
+                values=(date, supplier or '—', material or '—',
+                        self._format_number(quantity), self._format_number(price),
+                        self._format_number(total), payer or '—',
+                        payment_type or '—', purpose or '—', comment or '—')
+            )
+        
+        # Восстанавливаем выбор
+        if selected_id is not None:
+            try:
+                self.tree.selection_set(str(selected_id))
+            except tk.TclError:
+                pass
+    
     def edit_selected(self):
-        selected_iid = self.paginated_tree.get_selected_iid()
-        if not selected_iid:
+        selected = self.tree.selection()
+        if not selected:
             messagebox.showwarning("Внимание", "Выберите запись для редактирования")
             return
-        
-        expense_id = int(selected_iid)
+        expense_id = int(selected[0])
         record = general_expenses_repo.get_by_id(expense_id)
         if not record:
             messagebox.showerror("Ошибка", "Запись не найдена")
             return
-        
         (expense_id, date, supplier, material, quantity, price,
          payer, payment_type, purpose, comment) = record
-        
         self.date_entry.set_date(date)
         self.supplier_combo.set(supplier or '')
         self.material_combo.set(material or '')
@@ -236,7 +270,7 @@ class GeneralExpensesWindow(BaseToplevelWindow):
         
         if success:
             self._clear_fields()
-            self.paginated_tree.refresh()
+            self.load_expenses()
         else:
             messagebox.showerror("Ошибка", message)
     
@@ -254,20 +288,17 @@ class GeneralExpensesWindow(BaseToplevelWindow):
         self.save_btn.config(text="Сохранить")
     
     def delete_selected(self):
-        selected_iid = self.paginated_tree.get_selected_iid()
-        if not selected_iid:
+        selected = self.tree.selection()
+        if not selected:
             messagebox.showwarning("Внимание", "Выберите запись для удаления")
             return
-        
-        expense_id = int(selected_iid)
+        expense_id = int(selected[0])
         record = general_expenses_repo.get_by_id(expense_id)
         if not record:
             messagebox.showerror("Ошибка", "Запись не найдена")
             return
-        
         _, date, supplier, material, quantity, price, payer, payment_type, purpose, comment = record
         total = (quantity or 0) * (price or 0)
-        
         if not messagebox.askyesno(
             "Подтверждение",
             f"Удалить запись о расходе?\n\n"
@@ -277,12 +308,11 @@ class GeneralExpensesWindow(BaseToplevelWindow):
             f"Сумма: {self._format_number(total)} руб."
         ):
             return
-        
         success, message = general_expenses_repo.delete(expense_id)
         if success:
             if self.editing_id == expense_id:
                 self._clear_fields()
-            self.paginated_tree.refresh()
+            self.load_expenses()
             messagebox.showinfo("Успех", message)
         else:
             messagebox.showerror("Ошибка", message)

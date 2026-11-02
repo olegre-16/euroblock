@@ -1,6 +1,6 @@
 """
 Окно "Продукция в резерве" - учёт резервирования продукции
-[ИЗМЕНЕНО] Применена пагинация к журналу резервов.
+[ИЗМЕНЕНО] Кнопки "Сохранить", "Изменить", "Удалить" теперь той же ширины, что и "Выход".
 """
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -11,7 +11,6 @@ from database.repositories import (
 )
 from ui.widgets.date_entry import DateEntry
 from ui.widgets.combobox_autocomplete import AutocompleteCombobox
-from ui.widgets.paginated_treeview import PaginatedTreeview
 from ui.base_window import BaseToplevelWindow
 
 
@@ -58,8 +57,10 @@ class ReservedProductsWindow(BaseToplevelWindow):
         self.customer_combo = AutocompleteCombobox(left_inner, values=self.customer_list)
         self.customer_combo.pack(fill=tk.X, padx=10, pady=(0, 8))
         
+        # [ИЗМЕНЕНО] Убран padx=10 у buttons_frame, чтобы кнопки внутри имели
+        # только один padx=10 от add_button (как у кнопки "Выход")
         buttons_frame = tk.Frame(left_inner, bg=COLORS['panel_bg'])
-        buttons_frame.pack(fill=tk.X, padx=10, pady=(10, 5))
+        buttons_frame.pack(fill=tk.X, padx=0, pady=(10, 5))
         
         self.save_btn = self.add_button(buttons_frame, "Сохранить", self.save_reservation,
                                         color=COLORS['button_primary'])
@@ -74,42 +75,42 @@ class ReservedProductsWindow(BaseToplevelWindow):
         self.exit_btn = self.add_button(left_inner, "Выход", self._on_close,
                                         color=COLORS['button_settings'], side=tk.BOTTOM)
         
-        # ===== ПРАВАЯ ЧАСТЬ С ПАГИНАЦИЕЙ =====
+        # ===== ПРАВАЯ ЧАСТЬ =====
         right_frame = self.create_right_panel(content_frame)
         tk.Label(
             right_frame, text="Журнал резервирования продукции",
             font=FONTS['menu'], bg=COLORS['panel_bg'], fg=COLORS['title_text']
         ).pack(pady=(10, 5), anchor='w', padx=10)
         
-        self.paginated_tree = PaginatedTreeview(
-            right_frame,
+        tree_container = tk.Frame(right_frame, bg=COLORS['panel_bg'])
+        tree_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        
+        scrollbar_y = ttk.Scrollbar(tree_container, orient=tk.VERTICAL)
+        scrollbar_y.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.tree = ttk.Treeview(
+            tree_container,
             columns=('start_date', 'end_date', 'product', 'color', 'quantity', 'customer'),
-            headings={
-                'start_date': 'Дата начала', 'end_date': 'Дата конца',
-                'product': 'Продукция', 'color': 'Цвет',
-                'quantity': 'Кол-во, шт/м2', 'customer': 'Заказчик'
-            },
-            column_widths={
-                'start_date': 90, 'end_date': 90, 'product': 200,
-                'color': 90, 'quantity': 100, 'customer': 150
-            },
-            page_size=100,
-            load_callback=self._load_reservations_page
+            show='headings',
+            yscrollcommand=scrollbar_y.set,
+            selectmode='browse'
         )
-        self.paginated_tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
-        self.paginated_tree.load_page(0)
-    
-    def _load_reservations_page(self, page, page_size):
-        """Callback для загрузки страницы резервов"""
-        rows, total = reserved_products_repo.get_all_reserved_paged(page, page_size)
-        formatted_rows = []
-        for row in rows:
-            res_id, start_date, end_date, product, color, quantity, customer = row
-            formatted_rows.append((
-                start_date, end_date, product, color or '—',
-                self._format_number(quantity), customer or '—'
-            ))
-        return formatted_rows, total
+        self.tree.heading('start_date', text='Дата начала', anchor='w')
+        self.tree.heading('end_date', text='Дата конца', anchor='w')
+        self.tree.heading('product', text='Продукция', anchor='w')
+        self.tree.heading('color', text='Цвет', anchor='w')
+        self.tree.heading('quantity', text='Кол-во, шт/м2', anchor='w')
+        self.tree.heading('customer', text='Заказчик', anchor='w')
+        self.tree.column('start_date', width=90, anchor='w')
+        self.tree.column('end_date', width=90, anchor='w')
+        self.tree.column('product', width=200, anchor='w')
+        self.tree.column('color', width=90, anchor='w')
+        self.tree.column('quantity', width=100, anchor='w')
+        self.tree.column('customer', width=150, anchor='w')
+        scrollbar_y.config(command=self.tree.yview)
+        self.tree.pack(fill=tk.BOTH, expand=True)
+        
+        self.load_reservations()
     
     def _on_product_change(self):
         product = self.product_combo.get().strip().lower()
@@ -122,7 +123,10 @@ class ReservedProductsWindow(BaseToplevelWindow):
     def _validate_number(self, event=None):
         widget = event.widget
         value = widget.get()
-        filtered = ''.join(c for c in value if c.isdigit() or c in '-.,')
+        filtered = ''
+        for char in value:
+            if char.isdigit() or char in '-.,':
+                filtered += char
         if filtered != value:
             widget.delete(0, tk.END)
             widget.insert(0, filtered)
@@ -150,6 +154,18 @@ class ReservedProductsWindow(BaseToplevelWindow):
                 return f"{num:g}"
         except (ValueError, TypeError):
             return str(value)
+    
+    def load_reservations(self):
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        records = reserved_products_repo.get_all_reserved()
+        for row in records:
+            res_id, start_date, end_date, product, color, quantity, customer = row
+            self.tree.insert(
+                '', 'end', iid=str(res_id),
+                values=(start_date, end_date, product, color or '—',
+                        self._format_number(quantity), customer or '—')
+            )
     
     def save_reservation(self):
         start_date = self.start_date_entry.get_date()
@@ -191,7 +207,7 @@ class ReservedProductsWindow(BaseToplevelWindow):
         
         if success:
             self._clear_fields()
-            self.paginated_tree.refresh()
+            self.load_reservations()
         else:
             messagebox.showerror("Ошибка", message)
     
@@ -206,17 +222,15 @@ class ReservedProductsWindow(BaseToplevelWindow):
         self.save_btn.config(text="Сохранить")
     
     def edit_selected(self):
-        selected_iid = self.paginated_tree.get_selected_iid()
-        if not selected_iid:
+        selected = self.tree.selection()
+        if not selected:
             messagebox.showwarning("Внимание", "Выберите запись для редактирования")
             return
-        
-        res_id = int(selected_iid)
+        res_id = int(selected[0])
         record = reserved_products_repo.get_by_id(res_id)
         if not record:
             messagebox.showerror("Ошибка", "Запись не найдена")
             return
-        
         _, start_date, end_date, product, color, quantity, customer = record
         self.start_date_entry.set_date(start_date)
         self.end_date_entry.set_date(end_date)
@@ -229,17 +243,15 @@ class ReservedProductsWindow(BaseToplevelWindow):
         self.save_btn.config(text="Обновить")
     
     def delete_selected(self):
-        selected_iid = self.paginated_tree.get_selected_iid()
-        if not selected_iid:
+        selected = self.tree.selection()
+        if not selected:
             messagebox.showwarning("Внимание", "Выберите запись для удаления")
             return
-        
-        res_id = int(selected_iid)
+        res_id = int(selected[0])
         record = reserved_products_repo.get_by_id(res_id)
         if not record:
             messagebox.showerror("Ошибка", "Запись не найдена")
             return
-        
         _, start_date, end_date, product, color, quantity, customer = record
         if not messagebox.askyesno(
             "Подтверждение",
@@ -249,12 +261,11 @@ class ReservedProductsWindow(BaseToplevelWindow):
             f"Количество: {self._format_number(quantity)}"
         ):
             return
-        
         success, message = reserved_products_repo.delete(res_id)
         if success:
             if self.editing_id == res_id:
                 self._clear_fields()
-            self.paginated_tree.refresh()
+            self.load_reservations()
             messagebox.showinfo("Успех", message)
         else:
             messagebox.showerror("Ошибка", message)

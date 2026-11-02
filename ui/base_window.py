@@ -1,7 +1,9 @@
 """
 Базовый класс для всех окон программы.
-Все окна открываются сразу на полный экран.
-Единое оформление как в окне "Производство продукции".
+[ИЗМЕНЕНО] 
+- Окно скрывается до построения UI (убирает мерцание)
+- Используется geometry() вместо state('zoomed') — работает на любом разрешении
+- Окно подстраивается под размер главного окна
 """
 import tkinter as tk
 from tkinter import ttk
@@ -13,7 +15,6 @@ class BaseToplevelWindow:
     Базовый класс для окон программы.
     Оформление идентично окну "Производство продукции".
     """
-    
     LEFT_PANEL_WIDTH = 350
     
     def __init__(self, parent, on_exit_callback, title="Окно"):
@@ -29,11 +30,59 @@ class BaseToplevelWindow:
         # Обработчик закрытия
         self.window.protocol("WM_DELETE_WINDOW", self._on_close)
         
-        # СРАЗУ РАЗВОРАЧИВАЕМ НА ВЕСЬ ЭКРАН
-        self.window.state('zoomed')
+        # [НОВОЕ] Скрываем окно ДО построения UI — убирает мерцание
+        self.window.withdraw()
+        
+        # [НОВОЕ] Применяем геометрию родителя (главного окна)
+        # Это работает на ЛЮБОМ разрешении и в ЛЮБОЙ ОС
+        self._apply_parent_geometry()
         
         # Строим интерфейс
         self._build_ui()
+        
+        # [НОВОЕ] Обновляем геометрию и показываем окно
+        self.window.update_idletasks()
+        self.window.deiconify()
+        
+        # Фокус на окно
+        self.window.lift()
+        self.window.focus_force()
+    
+    def _apply_parent_geometry(self):
+        """
+        Применить геометрию родительского окна.
+        Окно открывается точно в том же месте и размере, что и главное окно.
+        Работает на любом разрешении экрана.
+        """
+        try:
+            # Обновляем информацию о родителе
+            self.parent.update_idletasks()
+            
+            # Получаем геометрию родителя
+            parent_x = self.parent.winfo_x()
+            parent_y = self.parent.winfo_y()
+            parent_w = self.parent.winfo_width()
+            parent_h = self.parent.winfo_height()
+            
+            # Если родитель ещё не отображён — используем размер экрана
+            if parent_w < 100 or parent_h < 100:
+                screen_w = self.window.winfo_screenwidth()
+                screen_h = self.window.winfo_screenheight()
+                parent_x = 0
+                parent_y = 0
+                parent_w = screen_w
+                parent_h = screen_h
+            
+            # Применяем геометрию
+            self.window.geometry(f"{parent_w}x{parent_h}+{parent_x}+{parent_y}")
+        except Exception as e:
+            # Fallback: максимальный размер экрана
+            try:
+                screen_w = self.window.winfo_screenwidth()
+                screen_h = self.window.winfo_screenheight()
+                self.window.geometry(f"{screen_w}x{screen_h}+0+0")
+            except Exception:
+                pass
     
     def _build_ui(self):
         """Построить интерфейс окна. Переопределяется в наследниках."""
@@ -48,9 +97,7 @@ class BaseToplevelWindow:
                 pass
         except:
             pass
-        
         self.window.destroy()
-        
         if self.on_exit_callback:
             self.on_exit_callback()
     
@@ -176,8 +223,8 @@ class BaseToplevelWindow:
             font=FONTS['field'],
             bg=COLORS['panel_bg'],
             fg=COLORS['title_text'],
-            anchor='w',        # Выравнивание текста по левому краю
-            justify='left'     # Многострочный текст тоже по левому краю
+            anchor='w',
+            justify='left'
         )
         lbl.pack(fill=tk.X, anchor='w', padx=10, pady=(5, 2))
         return lbl
@@ -204,7 +251,6 @@ class BaseToplevelWindow:
         )
         
         if side == tk.BOTTOM:
-            # Кнопка прижимается к низу
             btn.pack(fill=tk.X, side=tk.BOTTOM, padx=10, pady=10)
         else:
             btn.pack(fill=tk.X, padx=10, pady=5)
