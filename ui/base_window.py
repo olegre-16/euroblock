@@ -1,12 +1,11 @@
 """
 Базовый класс для всех окон программы.
-[ИЗМЕНЕНО] 
-- Окно скрывается до построения UI (убирает мерцание)
-- Используется geometry() вместо state('zoomed') — работает на любом разрешении
-- Окно подстраивается под размер главного окна
+Все окна открываются сразу на полный экран.
+Единое оформление как в окне "Производство продукции".
+[ИЗМЕНЕНО] Добавлены методы-обёртки для messagebox, предотвращающие сворачивание окон.
 """
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 from config.settings import COLORS, FONTS, PADDING, SIZES
 
 
@@ -30,64 +29,83 @@ class BaseToplevelWindow:
         # Обработчик закрытия
         self.window.protocol("WM_DELETE_WINDOW", self._on_close)
         
-        # [НОВОЕ] Скрываем окно ДО построения UI — убирает мерцание
-        self.window.withdraw()
-        
-        # [НОВОЕ] Применяем геометрию родителя (главного окна)
-        # Это работает на ЛЮБОМ разрешении и в ЛЮБОЙ ОС
-        self._apply_parent_geometry()
+        # СРАЗУ РАЗВОРАЧИВАЕМ НА ВЕСЬ ЭКРАН
+        self.window.state('zoomed')
         
         # Строим интерфейс
         self._build_ui()
-        
-        # [НОВОЕ] Обновляем геометрию и показываем окно
-        self.window.update_idletasks()
-        self.window.deiconify()
-        
-        # Фокус на окно
-        self.window.lift()
-        self.window.focus_force()
-    
-    def _apply_parent_geometry(self):
-        """
-        Применить геометрию родительского окна.
-        Окно открывается точно в том же месте и размере, что и главное окно.
-        Работает на любом разрешении экрана.
-        """
-        try:
-            # Обновляем информацию о родителе
-            self.parent.update_idletasks()
-            
-            # Получаем геометрию родителя
-            parent_x = self.parent.winfo_x()
-            parent_y = self.parent.winfo_y()
-            parent_w = self.parent.winfo_width()
-            parent_h = self.parent.winfo_height()
-            
-            # Если родитель ещё не отображён — используем размер экрана
-            if parent_w < 100 or parent_h < 100:
-                screen_w = self.window.winfo_screenwidth()
-                screen_h = self.window.winfo_screenheight()
-                parent_x = 0
-                parent_y = 0
-                parent_w = screen_w
-                parent_h = screen_h
-            
-            # Применяем геометрию
-            self.window.geometry(f"{parent_w}x{parent_h}+{parent_x}+{parent_y}")
-        except Exception as e:
-            # Fallback: максимальный размер экрана
-            try:
-                screen_w = self.window.winfo_screenwidth()
-                screen_h = self.window.winfo_screenheight()
-                self.window.geometry(f"{screen_w}x{screen_h}+0+0")
-            except Exception:
-                pass
     
     def _build_ui(self):
         """Построить интерфейс окна. Переопределяется в наследниках."""
         pass
     
+    # ========================================================================
+    # [НОВОЕ] Методы-обёртки для messagebox
+    # Предотвращают сворачивание окна при показе диалогов
+    # ========================================================================
+    def _prepare_for_messagebox(self):
+        """Подготовить окно перед показом messagebox"""
+        try:
+            # Делаем окно topmost, чтобы messagebox был поверх
+            self.window.attributes('-topmost', True)
+            # Обновляем окно
+            self.window.update_idletasks()
+        except tk.TclError:
+            pass
+    
+    def _restore_after_messagebox(self):
+        """Восстановить состояние окна после показа messagebox"""
+        try:
+            # Если окно свернулось — разворачиваем
+            if self.window.state() == 'iconic':
+                self.window.deiconify()
+            
+            # Возвращаем полноэкранный режим
+            self.window.state('zoomed')
+            
+            # Снимаем topmost
+            self.window.attributes('-topmost', False)
+            
+            # Поднимаем окно на передний план
+            self.window.lift()
+            self.window.focus_force()
+            
+            # Обновляем окно
+            self.window.update_idletasks()
+        except tk.TclError:
+            pass
+    
+    def show_info(self, title, message):
+        """Показать информационное сообщение (без сворачивания окна)"""
+        self._prepare_for_messagebox()
+        result = messagebox.showinfo(title, message, parent=self.window)
+        self._restore_after_messagebox()
+        return result
+    
+    def show_warning(self, title, message):
+        """Показать предупреждение (без сворачивания окна)"""
+        self._prepare_for_messagebox()
+        result = messagebox.showwarning(title, message, parent=self.window)
+        self._restore_after_messagebox()
+        return result
+    
+    def show_error(self, title, message):
+        """Показать ошибку (без сворачивания окна)"""
+        self._prepare_for_messagebox()
+        result = messagebox.showerror(title, message, parent=self.window)
+        self._restore_after_messagebox()
+        return result
+    
+    def ask_yes_no(self, title, message):
+        """Задать вопрос Да/Нет (без сворачивания окна)"""
+        self._prepare_for_messagebox()
+        result = messagebox.askyesno(title, message, parent=self.window)
+        self._restore_after_messagebox()
+        return result
+    
+    # ========================================================================
+    # Остальные методы базового класса
+    # ========================================================================
     def _on_close(self):
         """Закрытие окна"""
         try:
@@ -105,14 +123,10 @@ class BaseToplevelWindow:
         return self.window
     
     def create_left_panel_with_scroll(self, parent_frame, width=None):
-        """
-        Создать левую панель с прокруткой.
-        Возвращает inner_frame, в который нужно упаковывать виджеты.
-        """
+        """Создать левую панель с прокруткой."""
         if width is None:
             width = self.LEFT_PANEL_WIDTH
         
-        # Основной фрейм левой панели с фиксированной шириной
         left_frame = tk.Frame(
             parent_frame,
             bg=COLORS['panel_bg'],
@@ -123,7 +137,6 @@ class BaseToplevelWindow:
         left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, PADDING['main']))
         left_frame.pack_propagate(False)
         
-        # Canvas для прокрутки
         canvas = tk.Canvas(
             left_frame,
             bg=COLORS['panel_bg'],
@@ -131,7 +144,6 @@ class BaseToplevelWindow:
         )
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
-        # Вертикальный скроллбар
         scrollbar = ttk.Scrollbar(
             left_frame,
             orient=tk.VERTICAL,
@@ -141,34 +153,27 @@ class BaseToplevelWindow:
         
         canvas.configure(yscrollcommand=scrollbar.set)
         
-        # Внутренний фрейм для размещения элементов
         inner_frame = tk.Frame(canvas, bg=COLORS['panel_bg'])
-        
-        # Создаём окно в canvas
         canvas_window_id = canvas.create_window(
             (0, 0), window=inner_frame, anchor='nw', width=width
         )
         
-        # Обновление области прокрутки при изменении размера inner_frame
         def _on_frame_configure(event):
             canvas.configure(scrollregion=canvas.bbox('all'))
         
         inner_frame.bind('<Configure>', _on_frame_configure)
         
-        # Обновление ширины inner_frame при изменении размера canvas
         def _on_canvas_configure(event):
             if event.width > 0:
                 canvas.itemconfig(canvas_window_id, width=event.width)
         
         canvas.bind('<Configure>', _on_canvas_configure)
         
-        # Прокрутка колёсиком мыши
         def _on_mousewheel(event):
             canvas.yview_scroll(int(-1 * (event.delta / 120)), 'units')
         
         canvas.bind_all('<MouseWheel>', _on_mousewheel)
         
-        # Сохраняем ссылки
         self._scroll_canvas = canvas
         self._scroll_inner_frame = inner_frame
         self._scroll_left_frame = left_frame
@@ -213,10 +218,7 @@ class BaseToplevelWindow:
         return content_frame
     
     def add_field_label(self, parent, text):
-        """
-        Добавить метку поля.
-        Текст выровнен по левому краю (anchor='w', justify='left').
-        """
+        """Добавить метку поля."""
         lbl = tk.Label(
             parent,
             text=text,
@@ -230,10 +232,7 @@ class BaseToplevelWindow:
         return lbl
     
     def add_button(self, parent, text, command, color=None, side=None):
-        """
-        Добавить кнопку.
-        Если side=tk.BOTTOM - кнопка прижимается к низу родителя.
-        """
+        """Добавить кнопку."""
         if color is None:
             color = COLORS['button_primary']
         
@@ -255,7 +254,6 @@ class BaseToplevelWindow:
         else:
             btn.pack(fill=tk.X, padx=10, pady=5)
         
-        # Hover эффекты
         if color == COLORS['button_primary']:
             hover_color = COLORS['button_primary_hover']
         elif color == COLORS['button_settings']:

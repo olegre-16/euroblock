@@ -1,9 +1,10 @@
 """
 Окно "Отчет по расходам" - отчет о расходах с фильтрацией
-[ИЗМЕНЕНО] Применена пагинация к журналу расходов справа.
+Оформление идентично окну "Производство продукции".
+[ИЗМЕНЕНО] Все messagebox заменены на методы базового класса.
 """
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
 from datetime import datetime
 import os
 import sys
@@ -16,7 +17,6 @@ from database.repositories import (
 )
 from ui.widgets.date_entry import DateEntry
 from ui.widgets.combobox_autocomplete import AutocompleteCombobox
-from ui.widgets.paginated_treeview import PaginatedTreeview
 from ui.base_window import BaseToplevelWindow
 
 
@@ -75,51 +75,49 @@ class ExpensesReportWindow(BaseToplevelWindow):
         self.exit_btn = self.add_button(left_inner, "Выход", self._on_close,
                                         color=COLORS['button_settings'], side=tk.BOTTOM)
         
-        # ===== ПРАВАЯ ЧАСТЬ С ПАГИНАЦИЕЙ =====
+        # ===== ПРАВАЯ ЧАСТЬ =====
         right_frame = self.create_right_panel(content_frame)
         tk.Label(
             right_frame, text="Журнал общих расходов",
             font=FONTS['menu'], bg=COLORS['panel_bg'], fg=COLORS['title_text']
         ).pack(pady=(10, 5), anchor='w', padx=10)
         
-        self.paginated_tree = PaginatedTreeview(
-            right_frame,
+        tree_container = tk.Frame(right_frame, bg=COLORS['panel_bg'])
+        tree_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        
+        scrollbar_y = ttk.Scrollbar(tree_container, orient=tk.VERTICAL)
+        scrollbar_y.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.tree = ttk.Treeview(
+            tree_container,
             columns=('date', 'supplier', 'material', 'quantity', 'price', 'total',
                      'payer', 'payment_type', 'purpose', 'comment'),
-            headings={
-                'date': 'Дата', 'supplier': 'Поставщик',
-                'material': 'Материалы и услуги', 'quantity': 'Кол-во',
-                'price': 'Цена, руб', 'total': 'Сумма, руб',
-                'payer': 'Плательщик', 'payment_type': 'Вид оплаты',
-                'purpose': 'Назначение', 'comment': 'Комментарии'
-            },
-            column_widths={
-                'date': 80, 'supplier': 150, 'material': 180,
-                'quantity': 60, 'price': 80, 'total': 90,
-                'payer': 150, 'payment_type': 150, 'purpose': 150, 'comment': 230
-            },
-            page_size=100,
-            load_callback=self._load_expenses_page
+            show='headings', yscrollcommand=scrollbar_y.set, selectmode='browse'
         )
-        self.paginated_tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
-        self.paginated_tree.load_page(0)
-    
-    def _load_expenses_page(self, page, page_size):
-        rows, total = general_expenses_repo.get_all_paged(page, page_size)
-        formatted_rows = []
-        for row in rows:
-            (expense_id, date, supplier, material, quantity, price,
-             payer, payment_type, purpose, comment) = row
-            qty = quantity or 0
-            prc = price or 0
-            total = qty * prc
-            formatted_rows.append((
-                date, supplier or '—', material or '—',
-                self._format_number(quantity), self._format_number(price),
-                self._format_number(total), payer or '—',
-                payment_type or '—', purpose or '—', comment or '—'
-            ))
-        return formatted_rows, total
+        self.tree.heading('date', text='Дата', anchor='w')
+        self.tree.heading('supplier', text='Поставщик', anchor='w')
+        self.tree.heading('material', text='Материалы и услуги', anchor='w')
+        self.tree.heading('quantity', text='Кол-во', anchor='w')
+        self.tree.heading('price', text='Цена, руб', anchor='w')
+        self.tree.heading('total', text='Сумма, руб', anchor='w')
+        self.tree.heading('payer', text='Плательщик', anchor='w')
+        self.tree.heading('payment_type', text='Вид оплаты', anchor='w')
+        self.tree.heading('purpose', text='Назначение', anchor='w')
+        self.tree.heading('comment', text='Комментарии', anchor='w')
+        self.tree.column('date', width=80, anchor='w')
+        self.tree.column('supplier', width=150, anchor='w')
+        self.tree.column('material', width=180, anchor='w')
+        self.tree.column('quantity', width=60, anchor='w')
+        self.tree.column('price', width=80, anchor='w')
+        self.tree.column('total', width=90, anchor='w')
+        self.tree.column('payer', width=150, anchor='w')
+        self.tree.column('payment_type', width=150, anchor='w')
+        self.tree.column('purpose', width=150, anchor='w')
+        self.tree.column('comment', width=230, anchor='w')
+        scrollbar_y.config(command=self.tree.yview)
+        self.tree.pack(fill=tk.BOTH, expand=True)
+        
+        self.load_expenses()
     
     def _validate_date(self, date_str):
         try:
@@ -154,7 +152,7 @@ class ExpensesReportWindow(BaseToplevelWindow):
     
     def _ensure_reportlab(self):
         if not self._check_reportlab_installed():
-            result = messagebox.askyesno(
+            result = self.ask_yes_no(
                 "Необходима установка",
                 "Для формирования PDF-отчетов требуется библиотека 'reportlab'.\n\n"
                 "Установить её автоматически сейчас?\n\n"
@@ -162,10 +160,10 @@ class ExpensesReportWindow(BaseToplevelWindow):
             )
             if result:
                 if self._install_reportlab():
-                    messagebox.showinfo("Успех", "Библиотека reportlab успешно установлена!")
+                    self.show_info("Успех", "Библиотека reportlab успешно установлена!")
                     return True
                 else:
-                    messagebox.showerror("Ошибка установки", "Не удалось установить библиотеку.")
+                    self.show_error("Ошибка установки", "Не удалось установить библиотеку.")
                     return False
             else:
                 return False
@@ -228,6 +226,24 @@ class ExpensesReportWindow(BaseToplevelWindow):
             pass
         return '999999'
     
+    def load_expenses(self):
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        records = general_expenses_repo.get_all()
+        for row in records:
+            (expense_id, date, supplier, material, quantity, price,
+             payer, payment_type, purpose, comment) = row
+            qty = quantity or 0
+            prc = price or 0
+            total = qty * prc
+            self.tree.insert(
+                '', 'end', iid=str(expense_id),
+                values=(date, supplier or '—', material or '—',
+                        self._format_number(quantity), self._format_number(price),
+                        self._format_number(total), payer or '—',
+                        payment_type or '—', purpose or '—', comment or '—')
+            )
+    
     def generate_pdf_report(self):
         if not self._ensure_reportlab():
             return
@@ -240,7 +256,7 @@ class ExpensesReportWindow(BaseToplevelWindow):
             from reportlab.pdfbase import pdfmetrics
             from reportlab.pdfbase.ttfonts import TTFont
         except ImportError:
-            messagebox.showerror("Ошибка", "Не удалось загрузить библиотеку reportlab.")
+            self.show_error("Ошибка", "Не удалось загрузить библиотеку reportlab.")
             return
         
         start_date = self.start_date_entry.get_date()
@@ -252,13 +268,13 @@ class ExpensesReportWindow(BaseToplevelWindow):
         material = self.material_combo.get().strip()
         
         if not start_date or not end_date:
-            messagebox.showwarning("Внимание", "Укажите даты периода")
+            self.show_warning("Внимание", "Укажите даты периода")
             return
         if not self._validate_date(start_date) or not self._validate_date(end_date):
-            messagebox.showwarning("Внимание", "Неверный формат даты")
+            self.show_warning("Внимание", "Неверный формат даты")
             return
         if self._date_to_comparable(start_date) > self._date_to_comparable(end_date):
-            messagebox.showwarning("Внимание", "Дата начала не может быть позже даты конца")
+            self.show_warning("Внимание", "Дата начала не может быть позже даты конца")
             return
         
         active_filters = []
@@ -284,7 +300,7 @@ class ExpensesReportWindow(BaseToplevelWindow):
         )
         
         if not report_data:
-            messagebox.showinfo("Информация", "Нет данных о расходах за выбранный период.")
+            self.show_info("Информация", "Нет данных о расходах за выбранный период.")
             return
         
         try:
@@ -294,7 +310,7 @@ class ExpensesReportWindow(BaseToplevelWindow):
             temp_file.close()
             file_path = temp_file.name
         except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось создать временный файл:\n\n{e}")
+            self.show_error("Ошибка", f"Не удалось создать временный файл:\n\n{e}")
             return
         
         try:
@@ -354,7 +370,7 @@ class ExpensesReportWindow(BaseToplevelWindow):
                 elif os.name == 'posix':
                     subprocess.call(['xdg-open', file_path])
             except Exception as e:
-                messagebox.showwarning(
+                self.show_warning(
                     "Предупреждение",
                     f"PDF сформирован, но не удалось открыть автоматически:\n\n{e}\n\n"
                     f"Файл сохранен во временной папке:\n{file_path}"
@@ -365,7 +381,7 @@ class ExpensesReportWindow(BaseToplevelWindow):
                     os.remove(file_path)
             except:
                 pass
-            messagebox.showerror("Ошибка", f"Не удалось сформировать PDF-отчет:\n\n{e}")
+            self.show_error("Ошибка", f"Не удалось сформировать PDF-отчет:\n\n{e}")
     
     def _build_all_expenses_table(self, report_data, cell_style, font_name):
         from reportlab.lib.pagesizes import A4, landscape

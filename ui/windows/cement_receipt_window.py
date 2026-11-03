@@ -1,16 +1,19 @@
 """
 Окно "Поступление цемента" - учёт поступления цемента в силосы
-[ИЗМЕНЕНО] Применена пагинация к журналу поступлений.
+Оформление идентично окну "Производство продукции".
+[ИЗМЕНЕНО] 
+- Все messagebox заменены на методы базового класса (предотвращает сворачивание)
+- Добавлен вызов _restore_window_state() после операций
+- Добавлен update_idletasks() для принудительного обновления UI
 """
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
 from datetime import datetime
 from config.settings import COLORS, FONTS, PADDING, SIZES
-from database.repositories import cement_silos_repo, cement_receipts_repo
+from database.repositories import cement_silos_repo, cement_receipts_repo, suppliers_repo
 from ui.widgets.date_entry import DateEntry
 from ui.widgets.combobox_autocomplete import AutocompleteCombobox
 from ui.widgets.silo_canvas import SiloCanvas
-from ui.widgets.paginated_treeview import PaginatedTreeview
 from ui.base_window import BaseToplevelWindow
 
 
@@ -18,12 +21,17 @@ class CementReceiptWindow(BaseToplevelWindow):
     """Окно поступления цемента"""
     def __init__(self, parent, on_exit_callback):
         self.silo_list = [row[0] for row in cement_silos_repo.get_all()]
+        # [НОВОЕ] Список поставщиков из справочника
+        self.supplier_list = [row[0] for row in suppliers_repo.get_all()]
         self.editing_id = None
         super().__init__(parent, on_exit_callback, title="Поступление цемента")
     
     def _build_ui(self):
+        """Построение интерфейса окна"""
         self.create_title_section(self.window, "Поступление цемента")
         content_frame = self.create_content_frame(self.window)
+        
+        # ===== ЛЕВАЯ ПАНЕЛЬ С ПРОКРУТКОЙ =====
         left_inner = self.create_left_panel_with_scroll(content_frame, width=350)
         
         self.add_field_label(left_inner, "Дата:")
@@ -41,12 +49,12 @@ class CementReceiptWindow(BaseToplevelWindow):
         self.quantity_entry.pack(fill=tk.X, padx=10, pady=(0, 6), ipady=SIZES['field_ipady'])
         self.quantity_entry.bind('<KeyRelease>', self._validate_number)
         
+        # [ИЗМЕНЕНО] Поставщик теперь список с автодополнением
         self.add_field_label(left_inner, "Поставщик:")
-        self.supplier_entry = tk.Entry(
-            left_inner, font=FONTS['field'], relief=tk.SOLID, bd=1, justify='left'
-        )
-        self.supplier_entry.pack(fill=tk.X, padx=10, pady=(0, 8), ipady=SIZES['field_ipady'])
+        self.supplier_combo = AutocompleteCombobox(left_inner, values=self.supplier_list)
+        self.supplier_combo.pack(fill=tk.X, padx=10, pady=(0, 8))
         
+        # ===== КНОПКИ =====
         self.save_btn = self.add_button(left_inner, "Сохранить", self.save_receipt,
                                         color=COLORS['button_primary'])
         self.save_btn.bind('<Enter>', lambda e: self._on_save_enter())
@@ -66,7 +74,6 @@ class CementReceiptWindow(BaseToplevelWindow):
         # ===== ПРАВАЯ ЧАСТЬ =====
         right_frame = self.create_right_panel(content_frame)
         
-        # Визуализация силосов
         silos_frame = tk.Frame(
             right_frame, bg=COLORS['panel_bg'],
             relief=tk.RAISED, bd=SIZES['panel_border']
@@ -84,40 +91,34 @@ class CementReceiptWindow(BaseToplevelWindow):
         self.silos_canvas = SiloCanvas(self.silos_canvas_container, silos_data, balances)
         self.silos_canvas.pack(side=tk.LEFT, fill=tk.X, expand=True)
         
-        # Таблица поступлений с пагинацией
         tk.Label(
             right_frame, text="Журнал поступлений цемента",
             font=FONTS['menu'], bg=COLORS['panel_bg'], fg=COLORS['title_text']
         ).pack(pady=(10, 5), anchor='w', padx=10)
         
-        self.paginated_tree = PaginatedTreeview(
-            right_frame,
+        tree_container = tk.Frame(right_frame, bg=COLORS['panel_bg'])
+        tree_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        
+        scrollbar_y = ttk.Scrollbar(tree_container, orient=tk.VERTICAL)
+        scrollbar_y.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.tree = ttk.Treeview(
+            tree_container,
             columns=('date', 'silo', 'quantity', 'supplier'),
-            headings={
-                'date': 'Дата', 'silo': 'Силос',
-                'quantity': 'Количество, кг', 'supplier': 'Поставщик'
-            },
-            column_widths={'date': 100, 'silo': 150, 'quantity': 120, 'supplier': 200},
-            page_size=100,
-            load_callback=self._load_receipts_page
+            show='headings', yscrollcommand=scrollbar_y.set, selectmode='browse'
         )
-        self.paginated_tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
-        self.paginated_tree.load_page(0)
-    
-    def _load_receipts_page(self, page, page_size):
-        """Callback для загрузки страницы поступлений"""
-        rows, total = cement_receipts_repo.get_all_paged(page, page_size)
-        formatted_rows = []
-        for row in rows:
-            receipt_id = row[0]
-            date = row[1]
-            silo = row[2]
-            quantity = row[3]
-            supplier = row[4] if len(row) > 4 else ''
-            formatted_rows.append((
-                date, silo, self._format_number(quantity), supplier or '—'
-            ))
-        return formatted_rows, total
+        self.tree.heading('date', text='Дата', anchor='w')
+        self.tree.heading('silo', text='Силос', anchor='w')
+        self.tree.heading('quantity', text='Количество, кг', anchor='w')
+        self.tree.heading('supplier', text='Поставщик', anchor='w')
+        self.tree.column('date', width=100, anchor='w')
+        self.tree.column('silo', width=150, anchor='w')
+        self.tree.column('quantity', width=120, anchor='w')
+        self.tree.column('supplier', width=200, anchor='w')
+        scrollbar_y.config(command=self.tree.yview)
+        self.tree.pack(fill=tk.BOTH, expand=True)
+        
+        self.load_receipts()
     
     def _validate_number(self, event=None):
         widget = event.widget
@@ -151,7 +152,37 @@ class CementReceiptWindow(BaseToplevelWindow):
         except (ValueError, TypeError):
             return str(value)
     
+    def load_receipts(self):
+        """Загрузить данные в таблицу"""
+        # Очищаем таблицу
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        
+        # Загружаем данные из БД
+        receipts = cement_receipts_repo.get_all()
+        for row in receipts:
+            receipt_id = row[0]
+            date = row[1]
+            silo = row[2]
+            quantity = row[3]
+            supplier = row[4] if len(row) > 4 else ''
+            self.tree.insert(
+                '', 'end', iid=str(receipt_id),
+                values=(date, silo, self._format_number(quantity), supplier or '—')
+            )
+        
+        # [НОВОЕ] Принудительное обновление UI
+        try:
+            self.tree.update()
+            self.window.update_idletasks()
+        except tk.TclError:
+            pass
+        
+        # Обновляем визуализацию силосов
+        self._update_silos_visualization()
+    
     def _update_silos_visualization(self):
+        """Обновить визуализацию силосов"""
         try:
             if hasattr(self, 'silos_canvas'):
                 self.silos_canvas.destroy()
@@ -163,26 +194,27 @@ class CementReceiptWindow(BaseToplevelWindow):
             print(f"Ошибка обновления визуализации силосов: {e}")
     
     def save_receipt(self):
+        """Сохранить новую запись"""
         date_str = self.date_entry.get_date()
         silo = self.silo_combo.get().strip()
         quantity_str = self.quantity_entry.get().strip()
-        supplier = self.supplier_entry.get().strip()
+        supplier = self.supplier_combo.get().strip()
         
         if not date_str:
-            messagebox.showwarning("Внимание", "Укажите дату")
+            self.show_warning("Внимание", "Укажите дату")
             return
         if not silo:
-            messagebox.showwarning("Внимание", "Выберите силос")
+            self.show_warning("Внимание", "Выберите силос")
             return
         if not quantity_str:
-            messagebox.showwarning("Внимание", "Укажите количество")
+            self.show_warning("Внимание", "Укажите количество")
             return
         
         try:
             datetime.strptime(date_str, '%d.%m.%Y')
             quantity = float(quantity_str.replace(',', '.'))
         except ValueError:
-            messagebox.showwarning("Внимание", "Неверный формат данных")
+            self.show_warning("Внимание", "Неверный формат данных")
             return
         
         if self.editing_id:
@@ -196,62 +228,76 @@ class CementReceiptWindow(BaseToplevelWindow):
         
         if success:
             self._clear_fields()
-            self.paginated_tree.refresh()
-            self._update_silos_visualization()
-            messagebox.showinfo("Успех", message)
+            self.load_receipts()
+            self.show_info("Успех", message)
+            # [НОВОЕ] Восстанавливаем состояние окна
+            self._restore_window_state()
         else:
-            messagebox.showerror("Ошибка", message)
+            self.show_error("Ошибка", message)
+            self._restore_window_state()
     
     def _clear_fields(self):
+        """Очистить все поля"""
         self.date_entry.clear()
         self.silo_combo.clear()
         self.quantity_entry.delete(0, tk.END)
-        self.supplier_entry.delete(0, tk.END)
+        self.supplier_combo.clear()
         self.editing_id = None
         self.save_btn.config(text="Сохранить")
     
     def edit_selected(self):
-        selected_iid = self.paginated_tree.get_selected_iid()
-        if not selected_iid:
-            messagebox.showwarning("Внимание", "Выберите запись")
+        """Загрузить данные для редактирования"""
+        selected = self.tree.selection()
+        if not selected:
+            self.show_warning("Внимание", "Выберите запись")
+            self._restore_window_state()
             return
-        
-        receipt_id = int(selected_iid)
+        receipt_id = int(selected[0])
         receipt = cement_receipts_repo.get_by_id(receipt_id)
         if not receipt:
-            messagebox.showerror("Ошибка", "Запись не найдена")
+            self.show_error("Ошибка", "Запись не найдена")
+            self._restore_window_state()
             return
-        
         date = receipt[1]
         silo = receipt[2]
         quantity = receipt[3]
         supplier = receipt[4] if len(receipt) > 4 else ''
-        
         self.date_entry.set_date(date)
         self.silo_combo.set(silo)
         self.quantity_entry.delete(0, tk.END)
         self.quantity_entry.insert(0, self._format_number(quantity))
-        self.supplier_entry.delete(0, tk.END)
-        self.supplier_entry.insert(0, supplier or '')
+        self.supplier_combo.set(supplier or '')
         self.editing_id = receipt_id
         self.save_btn.config(text="Обновить")
+        self._restore_window_state()
     
     def delete_selected(self):
-        selected_iid = self.paginated_tree.get_selected_iid()
-        if not selected_iid:
-            messagebox.showwarning("Внимание", "Выберите запись")
+        """Удалить выбранную запись"""
+        selected = self.tree.selection()
+        if not selected:
+            self.show_warning("Внимание", "Выберите запись")
+            self._restore_window_state()
             return
+        receipt_id = int(selected[0])
         
-        receipt_id = int(selected_iid)
-        if not messagebox.askyesno("Подтверждение", "Удалить запись?"):
+        # [ИЗМЕНЕНО] Используем self.ask_yes_no вместо messagebox.askyesno
+        if not self.ask_yes_no("Подтверждение", "Удалить запись?"):
+            self._restore_window_state()
             return
         
         success, message = cement_receipts_repo.delete(receipt_id)
         if success:
             if self.editing_id == receipt_id:
                 self._clear_fields()
-            self.paginated_tree.refresh()
-            self._update_silos_visualization()
-            messagebox.showinfo("Успех", message)
+            
+            # [НОВОЕ] Перезагружаем таблицу
+            self.load_receipts()
+            
+            # [НОВОЕ] Показываем сообщение об успехе
+            self.show_info("Успех", message)
+            
+            # [НОВОЕ] Восстанавливаем состояние окна
+            self._restore_window_state()
         else:
-            messagebox.showerror("Ошибка", message)
+            self.show_error("Ошибка", message)
+            self._restore_window_state()

@@ -1,9 +1,10 @@
 """
 Окно "Отчет по производству продукции" - отчет о производстве
-[ИЗМЕНЕНО] Применена пагинация к журналу производства справа.
+Оформление идентично окну "Производство продукции".
+[ИЗМЕНЕНО] Все messagebox заменены на методы базового класса.
 """
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
 from datetime import datetime
 import os
 import sys
@@ -15,7 +16,6 @@ from database.repositories import (
 )
 from ui.widgets.date_entry import DateEntry
 from ui.widgets.combobox_autocomplete import AutocompleteCombobox
-from ui.widgets.paginated_treeview import PaginatedTreeview
 from ui.base_window import BaseToplevelWindow
 
 
@@ -67,45 +67,38 @@ class ProductionReportWindow(BaseToplevelWindow):
         self.exit_btn = self.add_button(left_inner, "Выход", self._on_close,
                                         color=COLORS['button_settings'], side=tk.BOTTOM)
         
-        # ===== ПРАВАЯ ЧАСТЬ С ПАГИНАЦИЕЙ =====
+        # ===== ПРАВАЯ ЧАСТЬ =====
         right_frame = self.create_right_panel(content_frame)
         tk.Label(
             right_frame, text="Журнал производства продукции",
             font=FONTS['menu'], bg=COLORS['panel_bg'], fg=COLORS['title_text']
         ).pack(pady=(10, 5), anchor='w', padx=10)
         
-        self.paginated_tree = PaginatedTreeview(
-            right_frame,
+        tree_container = tk.Frame(right_frame, bg=COLORS['panel_bg'])
+        tree_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        
+        scrollbar_y = ttk.Scrollbar(tree_container, orient=tk.VERTICAL)
+        scrollbar_y.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.tree = ttk.Treeview(
+            tree_container,
             columns=('date', 'equipment', 'product', 'color', 'quantity'),
-            headings={
-                'date': 'Дата производства', 'equipment': 'Оборудование',
-                'product': 'Продукция', 'color': 'Цвет',
-                'quantity': 'Количество, шт/м2'
-            },
-            column_widths={
-                'date': 100, 'equipment': 140, 'product': 220,
-                'color': 100, 'quantity': 130
-            },
-            page_size=100,
-            load_callback=self._load_production_page
+            show='headings', yscrollcommand=scrollbar_y.set, selectmode='browse'
         )
-        self.paginated_tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
-        self.paginated_tree.load_page(0)
-    
-    def _load_production_page(self, page, page_size):
-        rows, total = production_repo.get_all_paged(page, page_size)
-        formatted_rows = []
-        for row in rows:
-            (prod_id, date, equipment, silo, product, color, quantity_pallets,
-             cement, enriched_sand, river_sand, keramzit, plasticizer, water, note) = row
-            if not product:
-                continue
-            calc_qty = self._convert_to_units(product, quantity_pallets)
-            formatted_rows.append((
-                date, equipment or '—', product, color or '—',
-                self._format_number(calc_qty)
-            ))
-        return formatted_rows, total
+        self.tree.heading('date', text='Дата производства', anchor='w')
+        self.tree.heading('equipment', text='Оборудование', anchor='w')
+        self.tree.heading('product', text='Продукция', anchor='w')
+        self.tree.heading('color', text='Цвет', anchor='w')
+        self.tree.heading('quantity', text='Количество, шт/м2', anchor='w')
+        self.tree.column('date', width=100, anchor='w')
+        self.tree.column('equipment', width=140, anchor='w')
+        self.tree.column('product', width=220, anchor='w')
+        self.tree.column('color', width=100, anchor='w')
+        self.tree.column('quantity', width=130, anchor='w')
+        scrollbar_y.config(command=self.tree.yview)
+        self.tree.pack(fill=tk.BOTH, expand=True)
+        
+        self.load_production()
     
     def _validate_date(self, date_str):
         try:
@@ -140,17 +133,17 @@ class ProductionReportWindow(BaseToplevelWindow):
     
     def _ensure_reportlab(self):
         if not self._check_reportlab_installed():
-            result = messagebox.askyesno(
+            result = self.ask_yes_no(
                 "Необходима установка",
                 "Для формирования PDF-отчетов требуется библиотека 'reportlab'.\n\n"
                 "Установить её автоматически сейчас?\n\n(Требуется интернет-соединение)"
             )
             if result:
                 if self._install_reportlab():
-                    messagebox.showinfo("Успех", "Библиотека reportlab успешно установлена!")
+                    self.show_info("Успех", "Библиотека reportlab успешно установлена!")
                     return True
                 else:
-                    messagebox.showerror("Ошибка установки", "Не удалось установить библиотеку.")
+                    self.show_error("Ошибка установки", "Не удалось установить библиотеку.")
                     return False
             else:
                 return False
@@ -178,6 +171,22 @@ class ProductionReportWindow(BaseToplevelWindow):
             return 0
         volume = self.volume_map.get(product_name, 1)
         return (quantity_pallets or 0) * volume
+    
+    def load_production(self):
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        records = production_repo.get_all()
+        for row in records:
+            (prod_id, date, equipment, silo, product, color, quantity_pallets,
+             cement, enriched_sand, river_sand, keramzit, plasticizer, water, note) = row
+            if not product:
+                continue
+            calc_qty = self._convert_to_units(product, quantity_pallets)
+            self.tree.insert(
+                '', 'end', iid=str(prod_id),
+                values=(date, equipment or '—', product, color or '—',
+                        self._format_number(calc_qty))
+            )
     
     def _format_number(self, value):
         if value is None or value == '':
@@ -235,7 +244,7 @@ class ProductionReportWindow(BaseToplevelWindow):
             from reportlab.pdfbase import pdfmetrics
             from reportlab.pdfbase.ttfonts import TTFont
         except ImportError:
-            messagebox.showerror("Ошибка", "Не удалось загрузить библиотеку reportlab.")
+            self.show_error("Ошибка", "Не удалось загрузить библиотеку reportlab.")
             return
         
         start_date = self.start_date_entry.get_date()
@@ -244,13 +253,13 @@ class ProductionReportWindow(BaseToplevelWindow):
         product = self.product_combo.get().strip()
         
         if not start_date or not end_date:
-            messagebox.showwarning("Внимание", "Укажите даты периода")
+            self.show_warning("Внимание", "Укажите даты периода")
             return
         if not self._validate_date(start_date) or not self._validate_date(end_date):
-            messagebox.showwarning("Внимание", "Неверный формат даты")
+            self.show_warning("Внимание", "Неверный формат даты")
             return
         if self._date_to_comparable(start_date) > self._date_to_comparable(end_date):
-            messagebox.showwarning("Внимание", "Дата начала не может быть позже даты конца")
+            self.show_warning("Внимание", "Дата начала не может быть позже даты конца")
             return
         
         active_filters = []
@@ -266,7 +275,7 @@ class ProductionReportWindow(BaseToplevelWindow):
         )
         
         if not report_data:
-            messagebox.showinfo("Информация", "Нет данных о производстве за выбранный период.")
+            self.show_info("Информация", "Нет данных о производстве за выбранный период.")
             return
         
         try:
@@ -276,7 +285,7 @@ class ProductionReportWindow(BaseToplevelWindow):
             temp_file.close()
             file_path = temp_file.name
         except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось создать временный файл:\n\n{e}")
+            self.show_error("Ошибка", f"Не удалось создать временный файл:\n\n{e}")
             return
         
         try:
@@ -453,7 +462,7 @@ class ProductionReportWindow(BaseToplevelWindow):
                 elif os.name == 'posix':
                     subprocess.call(['xdg-open', file_path])
             except Exception as e:
-                messagebox.showwarning(
+                self.show_warning(
                     "Предупреждение",
                     f"PDF сформирован, но не удалось открыть автоматически:\n\n{e}\n\n"
                     f"Файл сохранен во временной папке:\n{file_path}"
@@ -464,7 +473,7 @@ class ProductionReportWindow(BaseToplevelWindow):
                     os.remove(file_path)
             except:
                 pass
-            messagebox.showerror("Ошибка", f"Не удалось сформировать PDF-отчет:\n\n{e}")
+            self.show_error("Ошибка", f"Не удалось сформировать PDF-отчет:\n\n{e}")
     
     def generate_summary_report(self):
         if not self._ensure_reportlab():
@@ -478,24 +487,24 @@ class ProductionReportWindow(BaseToplevelWindow):
             from reportlab.pdfbase import pdfmetrics
             from reportlab.pdfbase.ttfonts import TTFont
         except ImportError:
-            messagebox.showerror("Ошибка", "Не удалось загрузить библиотеку reportlab.")
+            self.show_error("Ошибка", "Не удалось загрузить библиотеку reportlab.")
             return
         
         start_date = self.start_date_entry.get_date()
         end_date = self.end_date_entry.get_date()
         if not start_date or not end_date:
-            messagebox.showwarning("Внимание", "Укажите даты периода")
+            self.show_warning("Внимание", "Укажите даты периода")
             return
         if not self._validate_date(start_date) or not self._validate_date(end_date):
-            messagebox.showwarning("Внимание", "Неверный формат даты")
+            self.show_warning("Внимание", "Неверный формат даты")
             return
         if self._date_to_comparable(start_date) > self._date_to_comparable(end_date):
-            messagebox.showwarning("Внимание", "Дата начала не может быть позже даты конца")
+            self.show_warning("Внимание", "Дата начала не может быть позже даты конца")
             return
         
         report_data = production_repo.get_production_report(start_date, end_date)
         if not report_data:
-            messagebox.showinfo("Информация", "Нет данных о производстве за выбранный период.")
+            self.show_info("Информация", "Нет данных о производстве за выбранный период.")
             return
         
         try:
@@ -505,7 +514,7 @@ class ProductionReportWindow(BaseToplevelWindow):
             temp_file.close()
             file_path = temp_file.name
         except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось создать временный файл:\n\n{e}")
+            self.show_error("Ошибка", f"Не удалось создать временный файл:\n\n{e}")
             return
         
         try:
@@ -581,7 +590,7 @@ class ProductionReportWindow(BaseToplevelWindow):
                 elif os.name == 'posix':
                     subprocess.call(['xdg-open', file_path])
             except Exception as e:
-                messagebox.showwarning(
+                self.show_warning(
                     "Предупреждение",
                     f"PDF сформирован, но не удалось открыть автоматически:\n\n{e}\n\n"
                     f"Файл сохранен во временной папке:\n{file_path}"
@@ -592,7 +601,7 @@ class ProductionReportWindow(BaseToplevelWindow):
                     os.remove(file_path)
             except:
                 pass
-            messagebox.showerror("Ошибка", f"Не удалось сформировать сводный отчет:\n\n{e}")
+            self.show_error("Ошибка", f"Не удалось сформировать сводный отчет:\n\n{e}")
     
     def generate_color_summary_report(self):
         if not self._ensure_reportlab():
@@ -606,24 +615,24 @@ class ProductionReportWindow(BaseToplevelWindow):
             from reportlab.pdfbase import pdfmetrics
             from reportlab.pdfbase.ttfonts import TTFont
         except ImportError:
-            messagebox.showerror("Ошибка", "Не удалось загрузить библиотеку reportlab.")
+            self.show_error("Ошибка", "Не удалось загрузить библиотеку reportlab.")
             return
         
         start_date = self.start_date_entry.get_date()
         end_date = self.end_date_entry.get_date()
         if not start_date or not end_date:
-            messagebox.showwarning("Внимание", "Укажите даты периода")
+            self.show_warning("Внимание", "Укажите даты периода")
             return
         if not self._validate_date(start_date) or not self._validate_date(end_date):
-            messagebox.showwarning("Внимание", "Неверный формат даты")
+            self.show_warning("Внимание", "Неверный формат даты")
             return
         if self._date_to_comparable(start_date) > self._date_to_comparable(end_date):
-            messagebox.showwarning("Внимание", "Дата начала не может быть позже даты конца")
+            self.show_warning("Внимание", "Дата начала не может быть позже даты конца")
             return
         
         report_data = production_repo.get_production_report(start_date, end_date)
         if not report_data:
-            messagebox.showinfo("Информация", "Нет данных о производстве за выбранный период.")
+            self.show_info("Информация", "Нет данных о производстве за выбранный период.")
             return
         
         try:
@@ -633,7 +642,7 @@ class ProductionReportWindow(BaseToplevelWindow):
             temp_file.close()
             file_path = temp_file.name
         except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось создать временный файл:\n\n{e}")
+            self.show_error("Ошибка", f"Не удалось создать временный файл:\n\n{e}")
             return
         
         try:
@@ -720,7 +729,7 @@ class ProductionReportWindow(BaseToplevelWindow):
                 elif os.name == 'posix':
                     subprocess.call(['xdg-open', file_path])
             except Exception as e:
-                messagebox.showwarning(
+                self.show_warning(
                     "Предупреждение",
                     f"PDF сформирован, но не удалось открыть автоматически:\n\n{e}\n\n"
                     f"Файл сохранен во временной папке:\n{file_path}"
@@ -731,4 +740,4 @@ class ProductionReportWindow(BaseToplevelWindow):
                     os.remove(file_path)
             except:
                 pass
-            messagebox.showerror("Ошибка", f"Не удалось сформировать сводный отчет (цвет):\n\n{e}")
+            self.show_error("Ошибка", f"Не удалось сформировать сводный отчет (цвет):\n\n{e}")

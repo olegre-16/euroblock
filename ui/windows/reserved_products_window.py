@@ -1,9 +1,10 @@
 """
 Окно "Продукция в резерве" - учёт резервирования продукции
-[ИЗМЕНЕНО] Кнопки "Сохранить", "Изменить", "Удалить" теперь той же ширины, что и "Выход".
+Оформление идентично окну "Производство продукции".
+[ИЗМЕНЕНО] Все messagebox заменены на методы базового класса.
 """
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
 from datetime import datetime
 from config.settings import COLORS, FONTS, PADDING, SIZES
 from database.repositories import (
@@ -57,8 +58,6 @@ class ReservedProductsWindow(BaseToplevelWindow):
         self.customer_combo = AutocompleteCombobox(left_inner, values=self.customer_list)
         self.customer_combo.pack(fill=tk.X, padx=10, pady=(0, 8))
         
-        # [ИЗМЕНЕНО] Убран padx=10 у buttons_frame, чтобы кнопки внутри имели
-        # только один padx=10 от add_button (как у кнопки "Выход")
         buttons_frame = tk.Frame(left_inner, bg=COLORS['panel_bg'])
         buttons_frame.pack(fill=tk.X, padx=0, pady=(10, 5))
         
@@ -91,9 +90,7 @@ class ReservedProductsWindow(BaseToplevelWindow):
         self.tree = ttk.Treeview(
             tree_container,
             columns=('start_date', 'end_date', 'product', 'color', 'quantity', 'customer'),
-            show='headings',
-            yscrollcommand=scrollbar_y.set,
-            selectmode='browse'
+            show='headings', yscrollcommand=scrollbar_y.set, selectmode='browse'
         )
         self.tree.heading('start_date', text='Дата начала', anchor='w')
         self.tree.heading('end_date', text='Дата конца', anchor='w')
@@ -176,24 +173,24 @@ class ReservedProductsWindow(BaseToplevelWindow):
         customer = self.customer_combo.get().strip()
         
         if not start_date or not end_date:
-            messagebox.showwarning("Внимание", "Укажите даты начала и конца резерва")
+            self.show_warning("Внимание", "Укажите даты начала и конца резерва")
             return
         try:
             datetime.strptime(start_date, '%d.%m.%Y')
             datetime.strptime(end_date, '%d.%m.%Y')
         except ValueError:
-            messagebox.showwarning("Внимание", "Неверный формат даты. Используйте ДД.ММ.ГГГГ")
+            self.show_warning("Внимание", "Неверный формат даты. Используйте ДД.ММ.ГГГГ")
             return
         if not product:
-            messagebox.showwarning("Внимание", "Выберите продукцию")
+            self.show_warning("Внимание", "Выберите продукцию")
             return
         if not quantity_str:
-            messagebox.showwarning("Внимание", "Укажите количество")
+            self.show_warning("Внимание", "Укажите количество")
             return
         try:
             quantity = float(quantity_str.replace(',', '.'))
         except ValueError:
-            messagebox.showwarning("Внимание", "Неверный формат количества")
+            self.show_warning("Внимание", "Неверный формат количества")
             return
         
         if self.editing_id:
@@ -209,7 +206,7 @@ class ReservedProductsWindow(BaseToplevelWindow):
             self._clear_fields()
             self.load_reservations()
         else:
-            messagebox.showerror("Ошибка", message)
+            self.show_error("Ошибка", message)
     
     def _clear_fields(self):
         self.start_date_entry.clear()
@@ -224,12 +221,12 @@ class ReservedProductsWindow(BaseToplevelWindow):
     def edit_selected(self):
         selected = self.tree.selection()
         if not selected:
-            messagebox.showwarning("Внимание", "Выберите запись для редактирования")
+            self.show_warning("Внимание", "Выберите запись для редактирования")
             return
         res_id = int(selected[0])
         record = reserved_products_repo.get_by_id(res_id)
         if not record:
-            messagebox.showerror("Ошибка", "Запись не найдена")
+            self.show_error("Ошибка", "Запись не найдена")
             return
         _, start_date, end_date, product, color, quantity, customer = record
         self.start_date_entry.set_date(start_date)
@@ -245,15 +242,15 @@ class ReservedProductsWindow(BaseToplevelWindow):
     def delete_selected(self):
         selected = self.tree.selection()
         if not selected:
-            messagebox.showwarning("Внимание", "Выберите запись для удаления")
+            self.show_warning("Внимание", "Выберите запись для удаления")
             return
         res_id = int(selected[0])
         record = reserved_products_repo.get_by_id(res_id)
         if not record:
-            messagebox.showerror("Ошибка", "Запись не найдена")
+            self.show_error("Ошибка", "Запись не найдена")
             return
         _, start_date, end_date, product, color, quantity, customer = record
-        if not messagebox.askyesno(
+        if not self.ask_yes_no(
             "Подтверждение",
             f"Удалить резерв?\n\n"
             f"Период: {start_date} - {end_date}\n"
@@ -266,6 +263,6 @@ class ReservedProductsWindow(BaseToplevelWindow):
             if self.editing_id == res_id:
                 self._clear_fields()
             self.load_reservations()
-            messagebox.showinfo("Успех", message)
+            self.show_info("Успех", message)
         else:
-            messagebox.showerror("Ошибка", message)
+            self.show_error("Ошибка", message)

@@ -1,12 +1,9 @@
 """
 Окно "Производство продукции" - учёт производства продукции
-[ИЗМЕНЕНО] 
-- Теперь наследуется от BaseToplevelWindow (единый механизм открытия)
-- Убрано мерцание при открытии
-- Адаптируется под любое разрешение экрана
+[ИЗМЕНЕНО] Все messagebox заменены на self.show_info/show_warning/show_error/ask_yes_no
 """
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
 from datetime import datetime
 from config.settings import COLORS, FONTS, PADDING, SIZES
 from database.repositories import (
@@ -33,8 +30,6 @@ class ProductionWindow(BaseToplevelWindow):
     def _build_ui(self):
         self.create_title_section(self.window, "Производство продукции")
         content_frame = self.create_content_frame(self.window)
-        
-        # ===== ЛЕВАЯ ЧАСТЬ =====
         left_inner = self.create_left_panel_with_scroll(content_frame, width=350)
         
         self.add_field_label(left_inner, "Дата производства:")
@@ -92,7 +87,6 @@ class ProductionWindow(BaseToplevelWindow):
         )
         self.note_entry.pack(fill=tk.X, padx=10, pady=(0, 6), ipady=SIZES['field_ipady'])
         
-        # Кнопки
         buttons_frame = tk.Frame(left_inner, bg=COLORS['panel_bg'])
         buttons_frame.pack(fill=tk.X, side=tk.BOTTOM, padx=10, pady=10)
         
@@ -112,8 +106,6 @@ class ProductionWindow(BaseToplevelWindow):
             relief=tk.FLAT, padx=PADDING['button_x'], pady=PADDING['button_y'], cursor='hand2'
         )
         self.edit_btn.pack(fill=tk.X, pady=4)
-        self.edit_btn.bind('<Enter>', lambda e: self.edit_btn.config(bg='#d68910'))
-        self.edit_btn.bind('<Leave>', lambda e: self.edit_btn.config(bg='#f39c12'))
         
         self.delete_btn = tk.Button(
             buttons_frame, text="Удалить", font=FONTS['menu'],
@@ -121,8 +113,6 @@ class ProductionWindow(BaseToplevelWindow):
             relief=tk.FLAT, padx=PADDING['button_x'], pady=PADDING['button_y'], cursor='hand2'
         )
         self.delete_btn.pack(fill=tk.X, pady=4)
-        self.delete_btn.bind('<Enter>', lambda e: self.delete_btn.config(bg='#c0392b'))
-        self.delete_btn.bind('<Leave>', lambda e: self.delete_btn.config(bg='#e74c3c'))
         
         self.exit_btn = tk.Button(
             buttons_frame, text="Выход", font=FONTS['menu'],
@@ -131,10 +121,7 @@ class ProductionWindow(BaseToplevelWindow):
             padx=PADDING['button_x'], pady=PADDING['button_y'], cursor='hand2'
         )
         self.exit_btn.pack(fill=tk.X, pady=(4, 0))
-        self.exit_btn.bind('<Enter>', lambda e: self.exit_btn.config(bg=COLORS['button_settings_hover']))
-        self.exit_btn.bind('<Leave>', lambda e: self.exit_btn.config(bg=COLORS['button_settings']))
         
-        # ===== ПРАВАЯ ЧАСТЬ =====
         right_frame = self.create_right_panel(content_frame)
         
         tk.Label(
@@ -153,9 +140,7 @@ class ProductionWindow(BaseToplevelWindow):
             columns=('date', 'equipment', 'product', 'color', 'quantity',
                      'cement', 'enriched_sand', 'plasticizer', 'river_sand',
                      'keramzit', 'water'),
-            show='headings',
-            yscrollcommand=scrollbar_y.set,
-            selectmode='browse'
+            show='headings', yscrollcommand=scrollbar_y.set, selectmode='browse'
         )
         self.tree.heading('date', text='Дата', anchor='w')
         self.tree.heading('equipment', text='Оборудование', anchor='w')
@@ -187,9 +172,7 @@ class ProductionWindow(BaseToplevelWindow):
         self.load_production()
     
     def _create_number_entry(self, parent):
-        entry = tk.Entry(
-            parent, font=FONTS['field'], relief=tk.SOLID, bd=1, justify='left'
-        )
+        entry = tk.Entry(parent, font=FONTS['field'], relief=tk.SOLID, bd=1, justify='left')
         entry.bind('<KeyRelease>', self._validate_number)
         return entry
     
@@ -292,8 +275,6 @@ class ProductionWindow(BaseToplevelWindow):
                 relief=tk.FLAT, padx=15, pady=5, cursor='hand2'
             )
             edit_btn.pack(side=tk.LEFT, padx=(0, 10))
-            edit_btn.bind('<Enter>', lambda e: edit_btn.config(bg=COLORS['button_primary_hover']))
-            edit_btn.bind('<Leave>', lambda e: edit_btn.config(bg=COLORS['button_primary']))
         
         close_btn = tk.Button(
             btn_frame, text="Закрыть", font=FONTS['menu'], command=on_close,
@@ -301,8 +282,6 @@ class ProductionWindow(BaseToplevelWindow):
             relief=tk.FLAT, padx=15, pady=5, cursor='hand2'
         )
         close_btn.pack(side=tk.RIGHT)
-        close_btn.bind('<Enter>', lambda e: close_btn.config(bg=COLORS['button_settings_hover']))
-        close_btn.bind('<Leave>', lambda e: close_btn.config(bg=COLORS['button_settings']))
         
         dialog.bind('<Escape>', lambda e: on_close())
     
@@ -383,12 +362,12 @@ class ProductionWindow(BaseToplevelWindow):
                     new_consumption[silo_name] = value
             success, message = production_repo.update_cement_consumption_by_date(date_str, new_consumption)
             if success:
-                messagebox.showinfo("Успех", message)
+                self.show_info("Успех", message)
                 dialog.destroy()
                 self.load_production()
                 self._show_cement_info_dialog(date_str)
             else:
-                messagebox.showerror("Ошибка", message)
+                self.show_error("Ошибка", message)
         
         def on_cancel():
             dialog.destroy()
@@ -400,8 +379,6 @@ class ProductionWindow(BaseToplevelWindow):
             relief=tk.FLAT, padx=15, pady=5, cursor='hand2'
         )
         save_btn.pack(side=tk.LEFT, padx=(0, 10))
-        save_btn.bind('<Enter>', lambda e: save_btn.config(bg=COLORS['button_primary_hover']))
-        save_btn.bind('<Leave>', lambda e: save_btn.config(bg=COLORS['button_primary']))
         
         cancel_btn = tk.Button(
             btn_frame, text="Отменить", font=FONTS['menu'], command=on_cancel,
@@ -409,8 +386,6 @@ class ProductionWindow(BaseToplevelWindow):
             relief=tk.FLAT, padx=15, pady=5, cursor='hand2'
         )
         cancel_btn.pack(side=tk.RIGHT)
-        cancel_btn.bind('<Enter>', lambda e: cancel_btn.config(bg=COLORS['button_settings_hover']))
-        cancel_btn.bind('<Leave>', lambda e: cancel_btn.config(bg=COLORS['button_settings']))
         
         dialog.bind('<Escape>', lambda e: on_cancel())
     
@@ -463,12 +438,12 @@ class ProductionWindow(BaseToplevelWindow):
     def edit_selected(self):
         selected = self.tree.selection()
         if not selected:
-            messagebox.showwarning("Внимание", "Выберите запись для редактирования")
+            self.show_warning("Внимание", "Выберите запись для редактирования")
             return
         prod_id = int(selected[0])
         record = production_repo.get_by_id(prod_id)
         if not record:
-            messagebox.showerror("Ошибка", "Запись не найдена")
+            self.show_error("Ошибка", "Запись не найдена")
             return
         (prod_id, date, equipment, silo, product, color, quantity,
          cement, enriched_sand, river_sand, keramzit, plasticizer, water, note) = record
@@ -520,12 +495,12 @@ class ProductionWindow(BaseToplevelWindow):
         note = self.note_entry.get().strip()
         
         if not date_str:
-            messagebox.showwarning("Внимание", "Укажите дату производства")
+            self.show_warning("Внимание", "Укажите дату производства")
             return
         try:
             datetime.strptime(date_str, '%d.%m.%Y')
         except ValueError:
-            messagebox.showwarning("Внимание", "Неверный формат даты. Используйте ДД.ММ.ГГГГ")
+            self.show_warning("Внимание", "Неверный формат даты. Используйте ДД.ММ.ГГГГ")
             return
         
         if self.editing_id:
@@ -545,11 +520,11 @@ class ProductionWindow(BaseToplevelWindow):
             )
         
         if success:
-            messagebox.showinfo("Успех", message)
+            self.show_info("Успех", message)
             self._clear_fields()
             self.load_production()
         else:
-            messagebox.showerror("Ошибка", message)
+            self.show_error("Ошибка", message)
     
     def _clear_fields(self):
         self.date_entry.clear()
@@ -576,7 +551,7 @@ class ProductionWindow(BaseToplevelWindow):
     def delete_selected(self):
         selected = self.tree.selection()
         if not selected:
-            messagebox.showwarning("Внимание", "Выберите запись для удаления")
+            self.show_warning("Внимание", "Выберите запись для удаления")
             return
         item_values = self.tree.item(selected[0], 'values')
         if not item_values:
@@ -585,7 +560,7 @@ class ProductionWindow(BaseToplevelWindow):
         all_records = production_repo.get_all()
         records_for_date = [r for r in all_records if r[1] == date_str]
         count = len(records_for_date)
-        if not messagebox.askyesno(
+        if not self.ask_yes_no(
             "Подтверждение",
             f"Удалить ВСЕ записи за {date_str}?\n\n"
             f"Будет удалено записей: {count}\n"
@@ -599,6 +574,6 @@ class ProductionWindow(BaseToplevelWindow):
                 if not editing_record:
                     self._clear_fields()
             self.load_production()
-            messagebox.showinfo("Успех", message)
+            self.show_info("Успех", message)
         else:
-            messagebox.showerror("Ошибка", message)
+            self.show_error("Ошибка", message)

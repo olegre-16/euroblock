@@ -1,9 +1,10 @@
 """
 Окно "Расход инертных материалов" - отчёт о расходе материалов на производство
-[ИЗМЕНЕНО] Применена пагинация к таблице расхода материалов.
+Оформление идентично окну "Производство продукции".
+[ИЗМЕНЕНО] Все messagebox заменены на методы базового класса.
 """
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
 from datetime import datetime
 import os
 import sys
@@ -15,7 +16,6 @@ from database.repositories import (
 )
 from ui.widgets.date_entry import DateEntry
 from ui.widgets.combobox_autocomplete import AutocompleteCombobox
-from ui.widgets.paginated_treeview import PaginatedTreeview
 from ui.base_window import BaseToplevelWindow
 
 
@@ -64,54 +64,50 @@ class InertMaterialsWindow(BaseToplevelWindow):
         self.exit_btn = self.add_button(left_inner, "Выход", self._on_close,
                                         color=COLORS['button_settings'], side=tk.BOTTOM)
         
-        # ===== ПРАВАЯ ЧАСТЬ С ПАГИНАЦИЕЙ =====
+        # ===== ПРАВАЯ ЧАСТЬ =====
         right_frame = self.create_right_panel(content_frame)
         tk.Label(
             right_frame, text="Расход инертных материалов на производство",
             font=FONTS['menu'], bg=COLORS['panel_bg'], fg=COLORS['title_text']
         ).pack(pady=(10, 5), anchor='w', padx=10)
         
-        # Загружаем данные один раз и пагинируем локально
-        self.report_data = production_repo.get_inert_materials_report()
+        tree_container = tk.Frame(right_frame, bg=COLORS['panel_bg'])
+        tree_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
         
-        self.paginated_tree = PaginatedTreeview(
-            right_frame,
+        scrollbar_y = ttk.Scrollbar(tree_container, orient=tk.VERTICAL)
+        scrollbar_y.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.tree = ttk.Treeview(
+            tree_container,
             columns=('date', 'equipment', 'product', 'quantity',
                      'cement', 'enriched_sand', 'plasticizer',
                      'river_sand', 'keramzit', 'water'),
-            headings={
-                'date': 'Дата производства', 'equipment': 'Оборудование',
-                'product': 'Продукция', 'quantity': 'Кол-во, шт/м2',
-                'cement': 'Цемент, кг', 'enriched_sand': 'Обог. песок, кг',
-                'plasticizer': 'Пластиф., кг', 'river_sand': 'Речн. песок, кг',
-                'keramzit': 'Керамзит, кг', 'water': 'Вода, кг'
-            },
-            column_widths={
-                'date': 80, 'equipment': 100, 'product': 180,
-                'quantity': 80, 'cement': 80, 'enriched_sand': 90,
-                'plasticizer': 80, 'river_sand': 90, 'keramzit': 80, 'water': 70
-            },
-            page_size=100
+            show='headings', yscrollcommand=scrollbar_y.set, selectmode='browse'
         )
-        self.paginated_tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        self.tree.heading('date', text='Дата производства', anchor='w')
+        self.tree.heading('equipment', text='Оборудование', anchor='w')
+        self.tree.heading('product', text='Продукция', anchor='w')
+        self.tree.heading('quantity', text='Кол-во, шт/м2', anchor='w')
+        self.tree.heading('cement', text='Цемент, кг', anchor='w')
+        self.tree.heading('enriched_sand', text='Обог. песок, кг', anchor='w')
+        self.tree.heading('plasticizer', text='Пластиф., кг', anchor='w')
+        self.tree.heading('river_sand', text='Речн. песок, кг', anchor='w')
+        self.tree.heading('keramzit', text='Керамзит, кг', anchor='w')
+        self.tree.heading('water', text='Вода, кг', anchor='w')
+        self.tree.column('date', width=80, anchor='w')
+        self.tree.column('equipment', width=100, anchor='w')
+        self.tree.column('product', width=180, anchor='w')
+        self.tree.column('quantity', width=80, anchor='w')
+        self.tree.column('cement', width=80, anchor='w')
+        self.tree.column('enriched_sand', width=90, anchor='w')
+        self.tree.column('plasticizer', width=80, anchor='w')
+        self.tree.column('river_sand', width=90, anchor='w')
+        self.tree.column('keramzit', width=80, anchor='w')
+        self.tree.column('water', width=70, anchor='w')
+        scrollbar_y.config(command=self.tree.yview)
+        self.tree.pack(fill=tk.BOTH, expand=True)
         
-        # Форматируем данные для отображения
-        formatted_data = []
-        for item in self.report_data:
-            formatted_data.append((
-                item['date'],
-                item['equipment'] or '—',
-                item['product'],
-                self._format_number(item['quantity']),
-                self._format_per_unit(item['cement_per_unit']),
-                self._format_per_unit(item['enriched_sand_per_unit']),
-                self._format_per_unit(item['plasticizer_per_unit']),
-                self._format_per_unit(item['river_sand_per_unit']),
-                self._format_per_unit(item['keramzit_per_unit']),
-                self._format_per_unit(item['water_per_unit'])
-            ))
-        
-        self.paginated_tree.load_all_data(formatted_data)
+        self.load_data()
     
     def _validate_date(self, date_str):
         try:
@@ -146,17 +142,17 @@ class InertMaterialsWindow(BaseToplevelWindow):
     
     def _ensure_reportlab(self):
         if not self._check_reportlab_installed():
-            result = messagebox.askyesno(
+            result = self.ask_yes_no(
                 "Необходима установка",
                 "Для формирования PDF-отчетов требуется библиотека 'reportlab'.\n\n"
                 "Установить её автоматически сейчас?\n\n(Требуется интернет-соединение)"
             )
             if result:
                 if self._install_reportlab():
-                    messagebox.showinfo("Успех", "Библиотека reportlab успешно установлена!")
+                    self.show_info("Успех", "Библиотека reportlab успешно установлена!")
                     return True
                 else:
-                    messagebox.showerror("Ошибка установки", "Не удалось установить библиотеку.")
+                    self.show_error("Ошибка установки", "Не удалось установить библиотеку.")
                     return False
             else:
                 return False
@@ -227,6 +223,28 @@ class InertMaterialsWindow(BaseToplevelWindow):
             pass
         return '999999'
     
+    def load_data(self):
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        report_data = production_repo.get_inert_materials_report()
+        for item in report_data:
+            row_id = f"{item['date']}_{item['equipment']}_{item['product']}"
+            self.tree.insert(
+                '', 'end', iid=row_id,
+                values=(
+                    item['date'],
+                    item['equipment'] or '—',
+                    item['product'],
+                    self._format_number(item['quantity']),
+                    self._format_per_unit(item['cement_per_unit']),
+                    self._format_per_unit(item['enriched_sand_per_unit']),
+                    self._format_per_unit(item['plasticizer_per_unit']),
+                    self._format_per_unit(item['river_sand_per_unit']),
+                    self._format_per_unit(item['keramzit_per_unit']),
+                    self._format_per_unit(item['water_per_unit'])
+                )
+            )
+    
     def generate_pdf_report(self):
         if not self._ensure_reportlab():
             return
@@ -239,7 +257,7 @@ class InertMaterialsWindow(BaseToplevelWindow):
             from reportlab.pdfbase import pdfmetrics
             from reportlab.pdfbase.ttfonts import TTFont
         except ImportError:
-            messagebox.showerror("Ошибка", "Не удалось загрузить библиотеку reportlab.")
+            self.show_error("Ошибка", "Не удалось загрузить библиотеку reportlab.")
             return
         
         start_date = self.start_date_entry.get_date()
@@ -248,13 +266,13 @@ class InertMaterialsWindow(BaseToplevelWindow):
         product = self.product_combo.get().strip()
         
         if not start_date or not end_date:
-            messagebox.showwarning("Внимание", "Укажите даты периода")
+            self.show_warning("Внимание", "Укажите даты периода")
             return
         if not self._validate_date(start_date) or not self._validate_date(end_date):
-            messagebox.showwarning("Внимание", "Неверный формат даты")
+            self.show_warning("Внимание", "Неверный формат даты")
             return
         if self._date_to_comparable(start_date) > self._date_to_comparable(end_date):
-            messagebox.showwarning("Внимание", "Дата начала не может быть позже даты конца")
+            self.show_warning("Внимание", "Дата начала не может быть позже даты конца")
             return
         
         active_filters = []
@@ -270,7 +288,7 @@ class InertMaterialsWindow(BaseToplevelWindow):
         )
         
         if not report_data:
-            messagebox.showinfo("Информация", "Нет данных о производстве за выбранный период.")
+            self.show_info("Информация", "Нет данных о производстве за выбранный период.")
             return
         
         try:
@@ -280,7 +298,7 @@ class InertMaterialsWindow(BaseToplevelWindow):
             temp_file.close()
             file_path = temp_file.name
         except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось создать временный файл:\n\n{e}")
+            self.show_error("Ошибка", f"Не удалось создать временный файл:\n\n{e}")
             return
         
         try:
@@ -410,7 +428,7 @@ class InertMaterialsWindow(BaseToplevelWindow):
                 elif os.name == 'posix':
                     subprocess.call(['xdg-open', file_path])
             except Exception as e:
-                messagebox.showwarning(
+                self.show_warning(
                     "Предупреждение",
                     f"PDF сформирован, но не удалось открыть автоматически:\n\n{e}\n\n"
                     f"Файл сохранен во временной папке:\n{file_path}"
@@ -421,7 +439,7 @@ class InertMaterialsWindow(BaseToplevelWindow):
                     os.remove(file_path)
             except:
                 pass
-            messagebox.showerror("Ошибка", f"Не удалось сформировать PDF-отчет:\n\n{e}")
+            self.show_error("Ошибка", f"Не удалось сформировать PDF-отчет:\n\n{e}")
     
     def generate_summary_report(self):
         if not self._ensure_reportlab():
@@ -435,24 +453,24 @@ class InertMaterialsWindow(BaseToplevelWindow):
             from reportlab.pdfbase import pdfmetrics
             from reportlab.pdfbase.ttfonts import TTFont
         except ImportError:
-            messagebox.showerror("Ошибка", "Не удалось загрузить библиотеку reportlab.")
+            self.show_error("Ошибка", "Не удалось загрузить библиотеку reportlab.")
             return
         
         start_date = self.start_date_entry.get_date()
         end_date = self.end_date_entry.get_date()
         if not start_date or not end_date:
-            messagebox.showwarning("Внимание", "Укажите даты периода")
+            self.show_warning("Внимание", "Укажите даты периода")
             return
         if not self._validate_date(start_date) or not self._validate_date(end_date):
-            messagebox.showwarning("Внимание", "Неверный формат даты")
+            self.show_warning("Внимание", "Неверный формат даты")
             return
         if self._date_to_comparable(start_date) > self._date_to_comparable(end_date):
-            messagebox.showwarning("Внимание", "Дата начала не может быть позже даты конца")
+            self.show_warning("Внимание", "Дата начала не может быть позже даты конца")
             return
         
         summary_data = production_repo.get_inert_materials_summary(start_date, end_date)
         if not summary_data:
-            messagebox.showinfo("Информация", "Нет данных о производстве за выбранный период.")
+            self.show_info("Информация", "Нет данных о производстве за выбранный период.")
             return
         
         try:
@@ -462,7 +480,7 @@ class InertMaterialsWindow(BaseToplevelWindow):
             temp_file.close()
             file_path = temp_file.name
         except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось создать временный файл:\n\n{e}")
+            self.show_error("Ошибка", f"Не удалось создать временный файл:\n\n{e}")
             return
         
         try:
@@ -540,7 +558,7 @@ class InertMaterialsWindow(BaseToplevelWindow):
                 elif os.name == 'posix':
                     subprocess.call(['xdg-open', file_path])
             except Exception as e:
-                messagebox.showwarning(
+                self.show_warning(
                     "Предупреждение",
                     f"PDF сформирован, но не удалось открыть автоматически:\n\n{e}\n\n"
                     f"Файл сохранен во временной папке:\n{file_path}"
@@ -551,4 +569,4 @@ class InertMaterialsWindow(BaseToplevelWindow):
                     os.remove(file_path)
             except:
                 pass
-            messagebox.showerror("Ошибка", f"Не удалось сформировать сводный отчет:\n\n{e}")
+            self.show_error("Ошибка", f"Не удалось сформировать сводный отчет:\n\n{e}")

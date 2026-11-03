@@ -1,9 +1,10 @@
 """
 Окно "Реализация продукции" - учёт продаж продукции
-[ИЗМЕНЕНО] Кнопки "Сохранить", "Изменить", "Удалить" теперь той же ширины, что и "Выход".
+Оформление идентично окну "Производство продукции".
+[ИЗМЕНЕНО] Все messagebox заменены на методы базового класса.
 """
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
 from datetime import datetime
 from config.settings import COLORS, FONTS, PADDING, SIZES
 from database.repositories import (
@@ -60,7 +61,6 @@ class SalesWindow(BaseToplevelWindow):
         self.price_entry.pack(fill=tk.X, padx=10, pady=(0, 8), ipady=SIZES['field_ipady'])
         self.price_entry.bind('<KeyRelease>', self._validate_number)
         
-        # [ИЗМЕНЕНО] Убран padx=10 у buttons_frame
         buttons_frame = tk.Frame(left_inner, bg=COLORS['panel_bg'])
         buttons_frame.pack(fill=tk.X, padx=0, pady=(10, 5))
         
@@ -93,9 +93,7 @@ class SalesWindow(BaseToplevelWindow):
         self.tree = ttk.Treeview(
             tree_container,
             columns=('date', 'equipment', 'product', 'color', 'quantity', 'price', 'total'),
-            show='headings',
-            yscrollcommand=scrollbar_y.set,
-            selectmode='browse'
+            show='headings', yscrollcommand=scrollbar_y.set, selectmode='browse'
         )
         self.tree.heading('date', text='Дата', anchor='w')
         self.tree.heading('equipment', text='Оборудование', anchor='w')
@@ -180,12 +178,12 @@ class SalesWindow(BaseToplevelWindow):
     def edit_selected(self):
         selected = self.tree.selection()
         if not selected:
-            messagebox.showwarning("Внимание", "Выберите запись для редактирования")
+            self.show_warning("Внимание", "Выберите запись для редактирования")
             return
         sale_id = int(selected[0])
         sale = sales_repo.get_by_id(sale_id)
         if not sale:
-            messagebox.showerror("Ошибка", "Запись не найдена")
+            self.show_error("Ошибка", "Запись не найдена")
             return
         if len(sale) == 7:
             _, date, product, color, quantity, price, equipment = sale
@@ -213,24 +211,24 @@ class SalesWindow(BaseToplevelWindow):
         price_str = self.price_entry.get().strip()
         
         if not date_str:
-            messagebox.showwarning("Внимание", "Укажите дату")
+            self.show_warning("Внимание", "Укажите дату")
             return
         try:
             datetime.strptime(date_str, '%d.%m.%Y')
         except ValueError:
-            messagebox.showwarning("Внимание", "Неверный формат даты. Используйте ДД.ММ.ГГГГ")
+            self.show_warning("Внимание", "Неверный формат даты. Используйте ДД.ММ.ГГГГ")
             return
         if not product:
-            messagebox.showwarning("Внимание", "Выберите продукцию")
+            self.show_warning("Внимание", "Выберите продукцию")
             return
         if not quantity_str or not price_str:
-            messagebox.showwarning("Внимание", "Укажите количество и цену")
+            self.show_warning("Внимание", "Укажите количество и цену")
             return
         try:
             quantity = float(quantity_str.replace(',', '.'))
             price = float(price_str.replace(',', '.'))
         except ValueError:
-            messagebox.showwarning("Внимание", "Неверный формат числа")
+            self.show_warning("Внимание", "Неверный формат числа")
             return
         
         if self.editing_sale_id:
@@ -254,17 +252,17 @@ class SalesWindow(BaseToplevelWindow):
             self.load_sales()
             self.product_combo.focus_set()
         else:
-            messagebox.showerror("Ошибка", message)
+            self.show_error("Ошибка", message)
     
     def delete_selected(self):
         selected = self.tree.selection()
         if not selected:
-            messagebox.showwarning("Внимание", "Выберите запись для удаления")
+            self.show_warning("Внимание", "Выберите запись для удаления")
             return
         sale_id = int(selected[0])
         sale = sales_repo.get_by_id(sale_id)
         if not sale:
-            messagebox.showerror("Ошибка", "Запись не найдена")
+            self.show_error("Ошибка", "Запись не найдена")
             return
         if len(sale) == 7:
             _, date, product, color, quantity, price, equipment = sale
@@ -272,7 +270,7 @@ class SalesWindow(BaseToplevelWindow):
             _, date, product, color, quantity, price = sale
             equipment = ''
         total = (quantity or 0) * (price or 0)
-        if not messagebox.askyesno(
+        if not self.ask_yes_no(
             "Подтверждение",
             f"Удалить запись о продаже?\n\n"
             f"Дата: {date}\nПродукция: {product}\n"
@@ -285,6 +283,6 @@ class SalesWindow(BaseToplevelWindow):
                 self.editing_sale_id = None
                 self.save_btn.config(text="Сохранить")
             self.load_sales()
-            messagebox.showinfo("Успех", message)
+            self.show_info("Успех", message)
         else:
-            messagebox.showerror("Ошибка", message)
+            self.show_error("Ошибка", message)

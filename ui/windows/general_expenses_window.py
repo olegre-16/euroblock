@@ -1,9 +1,10 @@
 """
 Окно "Расходы общие" - учёт общих расходов
-[ИЗМЕНЕНО] Кнопки "Сохранить", "Изменить", "Удалить" теперь той же ширины, что и "Выход".
+Оформление идентично окну "Производство продукции".
+[ИЗМЕНЕНО] Все messagebox заменены на методы базового класса.
 """
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
 from datetime import datetime
 from config.settings import COLORS, FONTS, PADDING, SIZES
 from database.repositories import (
@@ -69,7 +70,6 @@ class GeneralExpensesWindow(BaseToplevelWindow):
         )
         self.comment_entry.pack(fill=tk.X, padx=10, pady=(0, 8), ipady=SIZES['field_ipady'])
         
-        # [ИЗМЕНЕНО] Убран padx=10 у buttons_frame
         buttons_frame = tk.Frame(left_inner, bg=COLORS['panel_bg'])
         buttons_frame.pack(fill=tk.X, padx=0, pady=(10, 5))
         
@@ -103,9 +103,7 @@ class GeneralExpensesWindow(BaseToplevelWindow):
             tree_container,
             columns=('date', 'supplier', 'material', 'quantity', 'price', 'total',
                      'payer', 'payment_type', 'purpose', 'comment'),
-            show='headings',
-            yscrollcommand=scrollbar_y.set,
-            selectmode='browse'
+            show='headings', yscrollcommand=scrollbar_y.set, selectmode='browse'
         )
         self.tree.heading('date', text='Дата', anchor='w')
         self.tree.heading('supplier', text='Поставщик', anchor='w')
@@ -133,9 +131,7 @@ class GeneralExpensesWindow(BaseToplevelWindow):
         self.load_expenses()
     
     def _create_number_entry(self, parent):
-        entry = tk.Entry(
-            parent, font=FONTS['field'], relief=tk.SOLID, bd=1, justify='left'
-        )
+        entry = tk.Entry(parent, font=FONTS['field'], relief=tk.SOLID, bd=1, justify='left')
         entry.bind('<KeyRelease>', self._validate_number)
         return entry
     
@@ -175,7 +171,6 @@ class GeneralExpensesWindow(BaseToplevelWindow):
             return str(value)
     
     def load_expenses(self):
-        # Сохраняем выбранную запись, чтобы восстановить выбор после перезагрузки
         selected_item = self.tree.selection()
         selected_id = None
         if selected_item:
@@ -202,7 +197,6 @@ class GeneralExpensesWindow(BaseToplevelWindow):
                         payment_type or '—', purpose or '—', comment or '—')
             )
         
-        # Восстанавливаем выбор
         if selected_id is not None:
             try:
                 self.tree.selection_set(str(selected_id))
@@ -212,12 +206,12 @@ class GeneralExpensesWindow(BaseToplevelWindow):
     def edit_selected(self):
         selected = self.tree.selection()
         if not selected:
-            messagebox.showwarning("Внимание", "Выберите запись для редактирования")
+            self.show_warning("Внимание", "Выберите запись для редактирования")
             return
         expense_id = int(selected[0])
         record = general_expenses_repo.get_by_id(expense_id)
         if not record:
-            messagebox.showerror("Ошибка", "Запись не найдена")
+            self.show_error("Ошибка", "Запись не найдена")
             return
         (expense_id, date, supplier, material, quantity, price,
          payer, payment_type, purpose, comment) = record
@@ -249,12 +243,12 @@ class GeneralExpensesWindow(BaseToplevelWindow):
         comment = self.comment_entry.get().strip()
         
         if not date_str:
-            messagebox.showwarning("Внимание", "Укажите дату")
+            self.show_warning("Внимание", "Укажите дату")
             return
         try:
             datetime.strptime(date_str, '%d.%m.%Y')
         except ValueError:
-            messagebox.showwarning("Внимание", "Неверный формат даты. Используйте ДД.ММ.ГГГГ")
+            self.show_warning("Внимание", "Неверный формат даты. Используйте ДД.ММ.ГГГГ")
             return
         
         if self.editing_id:
@@ -272,7 +266,7 @@ class GeneralExpensesWindow(BaseToplevelWindow):
             self._clear_fields()
             self.load_expenses()
         else:
-            messagebox.showerror("Ошибка", message)
+            self.show_error("Ошибка", message)
     
     def _clear_fields(self):
         self.date_entry.clear()
@@ -290,16 +284,16 @@ class GeneralExpensesWindow(BaseToplevelWindow):
     def delete_selected(self):
         selected = self.tree.selection()
         if not selected:
-            messagebox.showwarning("Внимание", "Выберите запись для удаления")
+            self.show_warning("Внимание", "Выберите запись для удаления")
             return
         expense_id = int(selected[0])
         record = general_expenses_repo.get_by_id(expense_id)
         if not record:
-            messagebox.showerror("Ошибка", "Запись не найдена")
+            self.show_error("Ошибка", "Запись не найдена")
             return
         _, date, supplier, material, quantity, price, payer, payment_type, purpose, comment = record
         total = (quantity or 0) * (price or 0)
-        if not messagebox.askyesno(
+        if not self.ask_yes_no(
             "Подтверждение",
             f"Удалить запись о расходе?\n\n"
             f"Дата: {date}\n"
@@ -313,6 +307,6 @@ class GeneralExpensesWindow(BaseToplevelWindow):
             if self.editing_id == expense_id:
                 self._clear_fields()
             self.load_expenses()
-            messagebox.showinfo("Успех", message)
+            self.show_info("Успех", message)
         else:
-            messagebox.showerror("Ошибка", message)
+            self.show_error("Ошибка", message)
