@@ -1,7 +1,9 @@
 """
 Окно "Касса" - учёт кассовых операций
 Оформление идентично окну "Производство продукции".
-[ИЗМЕНЕНО] Уменьшен hardcoded шрифт в balance_label.
+[ИЗМЕНЕНО]
+- Кнопки "Сохранить" и "Удалить" теперь той же ширины, что и "Выход"
+- В табличной части дни чередуются по цвету (светло-серый / белый)
 """
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -43,9 +45,10 @@ class CashWindow(BaseToplevelWindow):
         self.expense_entry.pack(fill=tk.X, padx=10, pady=(0, 8), ipady=SIZES['field_ipady'])
         self.expense_entry.bind('<KeyRelease>', self._validate_number)
         
-        # Кнопки
+        # [ИЗМЕНЕНО] Убран padx=10 у buttons_frame, чтобы кнопки внутри
+        # имели только один padx=10 от add_button (как у кнопки "Выход")
         buttons_frame = tk.Frame(left_inner, bg=COLORS['panel_bg'])
-        buttons_frame.pack(fill=tk.X, padx=10, pady=(10, 5))
+        buttons_frame.pack(fill=tk.X, padx=0, pady=(10, 5))
         
         self.save_btn = self.add_button(buttons_frame, "Сохранить", self.save_operation,
                                         color=COLORS['button_primary'])
@@ -86,6 +89,10 @@ class CashWindow(BaseToplevelWindow):
         scrollbar_y.config(command=self.tree.yview)
         self.tree.pack(fill=tk.BOTH, expand=True)
         
+        # [НОВОЕ] Настраиваем теги для чередования цветов по дням
+        self.tree.tag_configure('gray_day', background='#f0f0f0')
+        self.tree.tag_configure('white_day', background='#ffffff')
+        
         self.tree.bind('<<TreeviewSelect>>', self._on_tree_select)
         
         # Блок итогов
@@ -96,10 +103,9 @@ class CashWindow(BaseToplevelWindow):
             fill=tk.X, pady=(0, 10)
         )
         
-        # [ИЗМЕНЕНО] Уменьшен шрифт с 12 до 10
         self.balance_label = tk.Label(
             self.summary_frame, text="Остаток, руб.: 0",
-            font=('Arial', 10, 'bold'),  # было ('Arial', 12, 'bold')
+            font=('Arial', 10, 'bold'),
             bg=COLORS['panel_bg'],
             fg=COLORS['title_text'], anchor='w'
         )
@@ -214,7 +220,9 @@ class CashWindow(BaseToplevelWindow):
         else:
             messagebox.showerror("Ошибка", message)
     
+    # [ИЗМЕНЕНО] Добавлено чередование цветов по дням
     def load_operations(self):
+        """Загрузить данные в таблицу с чередованием цветов по дням"""
         for item in self.tree.get_children():
             self.tree.delete(item)
         
@@ -238,7 +246,15 @@ class CashWindow(BaseToplevelWindow):
         sorted_dates = sorted(grouped_by_date.keys(), 
                               key=lambda d: date_to_comparable(d), reverse=True)
         
+        # [НОВОЕ] Счётчик дней для чередования цветов
+        day_index = 0
+        
         for date in sorted_dates:
+            # [НОВОЕ] Определяем тег цвета для этого дня
+            # Чётные дни (0, 2, 4...) — светло-серый, нечётные (1, 3, 5...) — белый
+            day_tag = 'gray_day' if day_index % 2 == 0 else 'white_day'
+            day_index += 1
+            
             ops = grouped_by_date[date]
             incomes = []
             expenses = []
@@ -252,6 +268,7 @@ class CashWindow(BaseToplevelWindow):
             if num_rows == 0:
                 continue
             
+            # [ИЗМЕНЕНО] Добавлен tags=(day_tag,) ко всем строкам дня
             for i in range(num_rows):
                 date_display = date if i == 0 else ''
                 inc_val = ''
@@ -264,22 +281,27 @@ class CashWindow(BaseToplevelWindow):
                 row_iid = f"row__{date}__{i}"
                 self.tree.insert(
                     '', 'end', iid=row_iid,
-                    values=(date_display, inc_val, exp_val)
+                    values=(date_display, inc_val, exp_val),
+                    tags=(day_tag,)
                 )
             
             total_income = sum(item['value'] for item in incomes)
             total_expense = sum(item['value'] for item in expenses)
             
+            # [ИЗМЕНЕНО] Итоговая строка тоже с тегом цвета дня
             self.tree.insert(
                 '', 'end', iid=f"total_{date}",
                 values=("Итог", self._format_money(total_income), 
-                        self._format_money(total_expense))
+                        self._format_money(total_expense)),
+                tags=(day_tag,)
             )
             
             turnover = total_income - total_expense
+            # [ИЗМЕНЕНО] Строка оборота тоже с тегом цвета дня
             self.tree.insert(
                 '', 'end', iid=f"turnover_{date}",
-                values=(f"Оборот за день: {self._format_money(turnover)} руб.", "", "")
+                values=(f"Оборот за день: {self._format_money(turnover)} руб.", "", ""),
+                tags=(day_tag,)
             )
     
     def delete_selected_cell(self):
