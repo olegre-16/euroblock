@@ -1,6 +1,7 @@
 """
 Окно "Продукция" - управление номенклатурой продукции
 С дополнительными полями: Объем на поддоне, Норматив производства
+[ИЗМЕНЕНО] Уменьшен hardcoded шрифт заголовка таблицы.
 """
 import os
 import csv
@@ -13,19 +14,14 @@ from utils.excel_reader import read_xlsx_first_column, is_xlsx_file
 
 class ProductsWindow:
     """Окно управления продукцией с расширенными полями"""
-    
     def __init__(self, parent, on_exit_callback):
         self.parent = parent
         self.on_exit_callback = on_exit_callback
         self.repo = products_repo
-        
-        # Состояние редактирования
         self.editing_product_name = None
         
-        # Основной контейнер
         self.main_frame = tk.Frame(parent, bg=COLORS['background'])
         
-        # Заголовок
         self.title_label = tk.Label(
             self.main_frame,
             text="Продукция",
@@ -50,25 +46,21 @@ class ProductsWindow:
         )
         self.left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, PADDING['main']))
         
-        # Поле "Наименование продукции"
         self._create_input_field(
             label_text="Наименование продукции:",
             attr_name="name_entry"
         )
         
-        # Поле "Объем на поддоне, шт/м2"
         self._create_input_field(
             label_text="Объем на поддоне, шт/м2:",
             attr_name="volume_entry"
         )
         
-        # Поле "Норматив производства, поддоны" (ИЗМЕНЕНО)
         self._create_input_field(
             label_text="Норматив производства, поддоны:",
             attr_name="rate_entry"
         )
         
-        # Кнопка "Сохранить"
         self.save_btn = tk.Button(
             self.left_frame,
             text="Сохранить",
@@ -85,7 +77,6 @@ class ProductsWindow:
         self.save_btn.bind('<Enter>', lambda e: self._on_save_enter())
         self.save_btn.bind('<Leave>', lambda e: self._on_save_leave())
         
-        # Кнопка "Изменить"
         self.edit_btn = tk.Button(
             self.left_frame,
             text="Изменить",
@@ -102,7 +93,6 @@ class ProductsWindow:
         self.edit_btn.bind('<Enter>', lambda e: self.edit_btn.config(bg='#d68910'))
         self.edit_btn.bind('<Leave>', lambda e: self.edit_btn.config(bg='#f39c12'))
         
-        # Кнопка "Удалить выбранное"
         self.delete_btn = tk.Button(
             self.left_frame,
             text="Удалить выбранное",
@@ -119,7 +109,6 @@ class ProductsWindow:
         self.delete_btn.bind('<Enter>', lambda e: self.delete_btn.config(bg='#c0392b'))
         self.delete_btn.bind('<Leave>', lambda e: self.delete_btn.config(bg='#e74c3c'))
         
-        # Кнопка "Импорт таблицы"
         self.import_btn = tk.Button(
             self.left_frame,
             text="Импорт таблицы",
@@ -136,7 +125,6 @@ class ProductsWindow:
         self.import_btn.bind('<Enter>', lambda e: self.import_btn.config(bg=COLORS['button_import_hover']))
         self.import_btn.bind('<Leave>', lambda e: self.import_btn.config(bg=COLORS['button_import']))
         
-        # Кнопка "Выход" внизу
         self.exit_btn = tk.Button(
             self.left_frame,
             text="Выход",
@@ -153,7 +141,7 @@ class ProductsWindow:
         self.exit_btn.bind('<Enter>', lambda e: self.exit_btn.config(bg=COLORS['button_settings_hover']))
         self.exit_btn.bind('<Leave>', lambda e: self.exit_btn.config(bg=COLORS['button_settings']))
         
-        # ===== ПРАВАЯ ЧАСТЬ: таблица с 3 колонками =====
+        # ===== ПРАВАЯ ЧАСТЬ =====
         self.right_frame = tk.Frame(
             self.content_frame,
             bg=COLORS['panel_bg'],
@@ -179,9 +167,9 @@ class ProductsWindow:
         
         style = ttk.Style()
         style.configure('Treeview', font=FONTS['menu'], rowheight=25)
-        style.configure('Treeview.Heading', font=('Arial', 11, 'bold'))
+        # [ИЗМЕНЕНО] Уменьшен шрифт с 11 до 9
+        style.configure('Treeview.Heading', font=('Arial', 9, 'bold'))
         
-        # Таблица с 3 колонками
         self.tree = ttk.Treeview(
             self.tree_frame,
             columns=('name', 'volume', 'rate'),
@@ -190,16 +178,12 @@ class ProductsWindow:
             selectmode='browse'
         )
         
-        # Все заголовки выровнены влево
         self.tree.heading('name', text='Наименование', anchor='w')
         self.tree.heading('volume', text='Объем на поддоне, шт/м2', anchor='w')
-        # ИЗМЕНЕНО: заголовок столбца теперь содержит единицу измерения
         self.tree.heading('rate', text='Норматив производства, поддоны', anchor='w')
         
-        # Все данные выровнены влево
         self.tree.column('name', width=350, anchor='w')
         self.tree.column('volume', width=180, anchor='w')
-        # Увеличена ширина колонки для длинного заголовка
         self.tree.column('rate', width=230, anchor='w')
         
         self.scrollbar.config(command=self.tree.yview)
@@ -208,7 +192,6 @@ class ProductsWindow:
         self.load_data()
     
     def _create_input_field(self, label_text, attr_name):
-        """Создать поле ввода с меткой и сохранить в атрибут"""
         field_frame = tk.Frame(self.left_frame, bg=COLORS['panel_bg'])
         field_frame.pack(fill=tk.X, padx=PADDING['button_x'], pady=(5, 0))
         
@@ -228,19 +211,17 @@ class ProductsWindow:
             relief=tk.SOLID,
             bd=1
         )
-        entry.pack(fill=tk.X, ipady=5)
+        entry.pack(fill=tk.X, ipady=SIZES['field_ipady'])
         
         setattr(self, attr_name, entry)
     
     def _on_save_enter(self):
-        """Обработка наведения на кнопку Сохранить/Обновить"""
         if self.editing_product_name:
             self.save_btn.config(bg='#27ae60')
         else:
             self.save_btn.config(bg=COLORS['button_primary_hover'])
     
     def _on_save_leave(self):
-        """Обработка ухода курсора с кнопки Сохранить/Обновить"""
         if self.editing_product_name:
             self.save_btn.config(bg='#27ae60')
         else:
@@ -250,23 +231,18 @@ class ProductsWindow:
         return self.main_frame
     
     def load_data(self):
-        """Загрузить данные в таблицу"""
         for item in self.tree.get_children():
             self.tree.delete(item)
-        
         data = self.repo.get_all()
         for row in data:
             name = row[0]
             volume = row[1] if row[1] is not None else ''
             rate = row[2] if row[2] is not None else ''
-            
             volume_str = self._format_number(volume)
             rate_str = self._format_number(rate)
-            
             self.tree.insert('', 'end', iid=name, values=(name, volume_str, rate_str))
     
     def _format_number(self, value):
-        """Форматировать число: убрать лишние нули после запятой"""
         if value == '' or value is None:
             return ''
         try:
@@ -279,31 +255,25 @@ class ProductsWindow:
             return str(value)
     
     def edit_selected(self):
-        """Загрузить данные выбранной записи в поля ввода для редактирования"""
         selected = self.tree.selection()
         if not selected:
             messagebox.showwarning("Внимание", "Выберите запись для редактирования")
             return
-        
         name_value = selected[0]
         item_values = self.tree.item(name_value, 'values')
         
         self.name_entry.delete(0, tk.END)
         self.name_entry.insert(0, item_values[0])
-        
         self.volume_entry.delete(0, tk.END)
         self.volume_entry.insert(0, item_values[1])
-        
         self.rate_entry.delete(0, tk.END)
         self.rate_entry.insert(0, item_values[2])
         
         self.editing_product_name = name_value
         self.save_btn.config(text="Обновить")
-        
         self.name_entry.focus()
     
     def save_product(self):
-        """Сохранить новую запись или обновить существующую"""
         name = self.name_entry.get()
         volume = self.volume_entry.get()
         rate = self.rate_entry.get()
@@ -315,7 +285,6 @@ class ProductsWindow:
                 volume, 
                 rate
             )
-            
             if success:
                 messagebox.showinfo("Успех", message)
                 self._clear_fields()
@@ -324,7 +293,6 @@ class ProductsWindow:
                 messagebox.showwarning("Ошибка", message)
         else:
             success, message = self.repo.add(name, volume, rate)
-            
             if success:
                 messagebox.showinfo("Успех", message)
                 self._clear_fields()
@@ -333,7 +301,6 @@ class ProductsWindow:
                 messagebox.showwarning("Ошибка", message)
     
     def _clear_fields(self):
-        """Очистить поля ввода и сбросить режим редактирования"""
         self.name_entry.delete(0, tk.END)
         self.volume_entry.delete(0, tk.END)
         self.rate_entry.delete(0, tk.END)
@@ -341,14 +308,11 @@ class ProductsWindow:
         self.save_btn.config(text="Сохранить")
     
     def delete_selected(self):
-        """Удалить выбранную запись"""
         selected = self.tree.selection()
         if not selected:
             messagebox.showwarning("Внимание", "Выберите запись для удаления")
             return
-        
         name_value = selected[0]
-        
         if messagebox.askyesno("Подтверждение", f"Удалить продукцию \"{name_value}\"?"):
             self.repo.delete(name_value)
             if self.editing_product_name == name_value:
@@ -357,7 +321,6 @@ class ProductsWindow:
             messagebox.showinfo("Успех", "Запись удалена")
     
     def import_table(self):
-        """Импорт продукции из внешнего файла (3 колонки)"""
         if self.editing_product_name:
             if not messagebox.askyesno(
                 "Внимание",
@@ -407,7 +370,6 @@ class ProductsWindow:
         for row in rows:
             if len(row) < 1 or not row[0].strip():
                 continue
-            
             name = row[0].strip()
             volume = row[1] if len(row) > 1 else ''
             rate = row[2] if len(row) > 2 else ''
@@ -424,7 +386,6 @@ class ProductsWindow:
         report = f"Импорт завершён:\n\n"
         report += f"✓ Добавлено: {added}\n"
         report += f"⊘ Пропущено (дубликаты): {skipped}\n"
-        
         if errors:
             report += f"✗ Ошибок: {len(errors)}\n\n"
             report += "Примеры ошибок:\n" + "\n".join(errors[:5])
@@ -433,11 +394,6 @@ class ProductsWindow:
         self.load_data()
     
     def _read_file(self, file_path):
-        """
-        Прочитать данные из файла.
-        Возвращает список строк, где каждая строка — список из 3 значений:
-        [наименование, объем_на_поддоне, норматив_производства]
-        """
         ext = os.path.splitext(file_path)[1].lower()
         rows = []
         
@@ -451,7 +407,6 @@ class ProductsWindow:
                             dialect = csv.Sniffer().sniff(sample, delimiters=',;\t|')
                         except csv.Error:
                             dialect = csv.excel
-                        
                         reader = csv.reader(f, dialect)
                         for row in reader:
                             if row:
@@ -477,7 +432,6 @@ class ProductsWindow:
                             parts.append('')
                         rows.append(parts[:3])
         
-        # Пропуск заголовка
         if rows:
             first = rows[0][0].strip().lower()
             header_keywords = [

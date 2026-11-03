@@ -1,6 +1,7 @@
 """
 Окно "Силос цемента" - управление силосами цемента
 С дополнительным полем: Вмещаемый объем, тн
+[ИЗМЕНЕНО] Уменьшен hardcoded шрифт заголовка таблицы.
 """
 import os
 import csv
@@ -13,14 +14,13 @@ from utils.excel_reader import read_xlsx_first_column, is_xlsx_file
 
 class CementSilosWindow:
     """Окно управления силосами цемента с расширенными полями"""
-    
     def __init__(self, parent, on_exit_callback):
         self.parent = parent
         self.on_exit_callback = on_exit_callback
         self.repo = cement_silos_repo
         
         # Состояние редактирования
-        self.editing_silo_name = None  # Название силоса, который редактируем
+        self.editing_silo_name = None
         
         # Основной контейнер
         self.main_frame = tk.Frame(parent, bg=COLORS['background'])
@@ -50,19 +50,16 @@ class CementSilosWindow:
         )
         self.left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, PADDING['main']))
         
-        # Поле "Добавить силос цемента"
         self._create_input_field(
             label_text="Добавить силос цемента:",
             attr_name="name_entry"
         )
         
-        # Поле "Вмещаемый объем, тн"
         self._create_input_field(
             label_text="Вмещаемый объем, тн:",
             attr_name="capacity_entry"
         )
         
-        # Кнопка "Сохранить"
         self.save_btn = tk.Button(
             self.left_frame,
             text="Сохранить",
@@ -79,13 +76,12 @@ class CementSilosWindow:
         self.save_btn.bind('<Enter>', lambda e: self._on_save_enter())
         self.save_btn.bind('<Leave>', lambda e: self._on_save_leave())
         
-        # Кнопка "Изменить"
         self.edit_btn = tk.Button(
             self.left_frame,
             text="Изменить",
             font=FONTS['menu'],
             command=self.edit_selected,
-            bg='#f39c12',  # Оранжевый цвет
+            bg='#f39c12',
             fg=COLORS['button_text'],
             relief=tk.FLAT,
             padx=PADDING['button_x'],
@@ -96,7 +92,6 @@ class CementSilosWindow:
         self.edit_btn.bind('<Enter>', lambda e: self.edit_btn.config(bg='#d68910'))
         self.edit_btn.bind('<Leave>', lambda e: self.edit_btn.config(bg='#f39c12'))
         
-        # Кнопка "Удалить выбранное"
         self.delete_btn = tk.Button(
             self.left_frame,
             text="Удалить выбранное",
@@ -113,7 +108,6 @@ class CementSilosWindow:
         self.delete_btn.bind('<Enter>', lambda e: self.delete_btn.config(bg='#c0392b'))
         self.delete_btn.bind('<Leave>', lambda e: self.delete_btn.config(bg='#e74c3c'))
         
-        # Кнопка "Импорт таблицы"
         self.import_btn = tk.Button(
             self.left_frame,
             text="Импорт таблицы",
@@ -130,7 +124,6 @@ class CementSilosWindow:
         self.import_btn.bind('<Enter>', lambda e: self.import_btn.config(bg=COLORS['button_import_hover']))
         self.import_btn.bind('<Leave>', lambda e: self.import_btn.config(bg=COLORS['button_import']))
         
-        # Кнопка "Выход" внизу
         self.exit_btn = tk.Button(
             self.left_frame,
             text="Выход",
@@ -173,9 +166,9 @@ class CementSilosWindow:
         
         style = ttk.Style()
         style.configure('Treeview', font=FONTS['menu'], rowheight=25)
-        style.configure('Treeview.Heading', font=('Arial', 11, 'bold'))
+        # [ИЗМЕНЕНО] Уменьшен шрифт с 11 до 9
+        style.configure('Treeview.Heading', font=('Arial', 9, 'bold'))
         
-        # Таблица с 2 колонками
         self.tree = ttk.Treeview(
             self.tree_frame,
             columns=('name', 'capacity'),
@@ -184,11 +177,9 @@ class CementSilosWindow:
             selectmode='browse'
         )
         
-        # Все заголовки выровнены влево
         self.tree.heading('name', text='Наименование', anchor='w')
         self.tree.heading('capacity', text='Вмещаемый объем, тн', anchor='w')
         
-        # Все данные выровнены влево
         self.tree.column('name', width=400, anchor='w')
         self.tree.column('capacity', width=200, anchor='w')
         
@@ -198,7 +189,6 @@ class CementSilosWindow:
         self.load_data()
     
     def _create_input_field(self, label_text, attr_name):
-        """Создать поле ввода с меткой и сохранить в атрибут"""
         field_frame = tk.Frame(self.left_frame, bg=COLORS['panel_bg'])
         field_frame.pack(fill=tk.X, padx=PADDING['button_x'], pady=(5, 0))
         
@@ -218,21 +208,19 @@ class CementSilosWindow:
             relief=tk.SOLID,
             bd=1
         )
-        entry.pack(fill=tk.X, ipady=5)
+        entry.pack(fill=tk.X, ipady=SIZES['field_ipady'])
         
         setattr(self, attr_name, entry)
     
     def _on_save_enter(self):
-        """Обработка наведения на кнопку Сохранить/Обновить"""
         if self.editing_silo_name:
-            self.save_btn.config(bg='#27ae60')  # Зелёный при обновлении
+            self.save_btn.config(bg='#27ae60')
         else:
             self.save_btn.config(bg=COLORS['button_primary_hover'])
     
     def _on_save_leave(self):
-        """Обработка ухода курсора с кнопки Сохранить/Обновить"""
         if self.editing_silo_name:
-            self.save_btn.config(bg='#27ae60')  # Зелёный при обновлении
+            self.save_btn.config(bg='#27ae60')
         else:
             self.save_btn.config(bg=COLORS['button_primary'])
     
@@ -240,23 +228,16 @@ class CementSilosWindow:
         return self.main_frame
     
     def load_data(self):
-        """Загрузить данные в таблицу"""
         for item in self.tree.get_children():
             self.tree.delete(item)
-        
         data = self.repo.get_all()
         for row in data:
             name = row[0]
             capacity = row[1] if row[1] is not None else ''
-            
-            # Форматирование числа
             capacity_str = self._format_number(capacity)
-            
-            # Используем название как iid
             self.tree.insert('', 'end', iid=name, values=(name, capacity_str))
     
     def _format_number(self, value):
-        """Форматировать число: убрать лишние нули после запятой"""
         if value == '' or value is None:
             return ''
         try:
@@ -269,44 +250,32 @@ class CementSilosWindow:
             return str(value)
     
     def edit_selected(self):
-        """Загрузить данные выбранной записи в поля ввода для редактирования"""
         selected = self.tree.selection()
         if not selected:
             messagebox.showwarning("Внимание", "Выберите запись для редактирования")
             return
-        
         name_value = selected[0]
         item_values = self.tree.item(name_value, 'values')
         
-        # Загружаем данные в поля
         self.name_entry.delete(0, tk.END)
         self.name_entry.insert(0, item_values[0])
-        
         self.capacity_entry.delete(0, tk.END)
         self.capacity_entry.insert(0, item_values[1])
         
-        # Сохраняем оригинальное название для обновления
         self.editing_silo_name = name_value
-        
-        # Меняем текст кнопки "Сохранить" на "Обновить"
         self.save_btn.config(text="Обновить")
-        
-        # Фокус на первое поле
         self.name_entry.focus()
     
     def save_silo(self):
-        """Сохранить новую запись или обновить существующую"""
         name = self.name_entry.get()
         capacity = self.capacity_entry.get()
         
         if self.editing_silo_name:
-            # Режим редактирования — обновляем запись
             success, message = self.repo.update(
                 self.editing_silo_name, 
                 name, 
                 capacity
             )
-            
             if success:
                 messagebox.showinfo("Успех", message)
                 self._clear_fields()
@@ -314,9 +283,7 @@ class CementSilosWindow:
             else:
                 messagebox.showwarning("Ошибка", message)
         else:
-            # Режим добавления — создаём новую запись
             success, message = self.repo.add(name, capacity)
-            
             if success:
                 messagebox.showinfo("Успех", message)
                 self._clear_fields()
@@ -325,32 +292,25 @@ class CementSilosWindow:
                 messagebox.showwarning("Ошибка", message)
     
     def _clear_fields(self):
-        """Очистить поля ввода и сбросить режим редактирования"""
         self.name_entry.delete(0, tk.END)
         self.capacity_entry.delete(0, tk.END)
         self.editing_silo_name = None
         self.save_btn.config(text="Сохранить")
     
     def delete_selected(self):
-        """Удалить выбранную запись"""
         selected = self.tree.selection()
         if not selected:
             messagebox.showwarning("Внимание", "Выберите запись для удаления")
             return
-        
         name_value = selected[0]
-        
         if messagebox.askyesno("Подтверждение", f"Удалить силос цемента \"{name_value}\"?"):
             self.repo.delete(name_value)
-            # Если удалили запись, которую редактировали — сбрасываем режим
             if self.editing_silo_name == name_value:
                 self._clear_fields()
             self.load_data()
             messagebox.showinfo("Успех", "Запись удалена")
     
     def import_table(self):
-        """Импорт силосов цемента из внешнего файла (2 колонки)"""
-        # Если в режиме редактирования — предупреждаем
         if self.editing_silo_name:
             if not messagebox.askyesno(
                 "Внимание",
@@ -399,7 +359,6 @@ class CementSilosWindow:
         for row in rows:
             if len(row) < 1 or not row[0].strip():
                 continue
-            
             name = row[0].strip()
             capacity = row[1] if len(row) > 1 else ''
             
@@ -415,7 +374,6 @@ class CementSilosWindow:
         report = f"Импорт завершён:\n\n"
         report += f"✓ Добавлено: {added}\n"
         report += f"⊘ Пропущено (дубликаты): {skipped}\n"
-        
         if errors:
             report += f"✗ Ошибок: {len(errors)}\n\n"
             report += "Примеры ошибок:\n" + "\n".join(errors[:5])
@@ -424,11 +382,6 @@ class CementSilosWindow:
         self.load_data()
     
     def _read_file(self, file_path):
-        """
-        Прочитать данные из файла.
-        Возвращает список строк, где каждая строка — список из 2 значений:
-        [наименование, вмещаемый_объем]
-        """
         ext = os.path.splitext(file_path)[1].lower()
         rows = []
         
@@ -442,11 +395,9 @@ class CementSilosWindow:
                             dialect = csv.Sniffer().sniff(sample, delimiters=',;\t|')
                         except csv.Error:
                             dialect = csv.excel
-                        
                         reader = csv.reader(f, dialect)
                         for row in reader:
                             if row:
-                                # Дополняем до 2 колонок, если их меньше
                                 while len(row) < 2:
                                     row.append('')
                                 rows.append(row[:2])
@@ -457,12 +408,10 @@ class CementSilosWindow:
                 raise ValueError("Не удалось определить кодировку файла")
         
         elif is_xlsx_file(file_path):
-            # Чтение XLSX — используем расширенный парсер
             from utils.excel_reader import read_xlsx_rows
             rows = read_xlsx_rows(file_path, max_columns=2)
         
         else:
-            # Текстовый файл — по строке
             with open(file_path, 'r', encoding='utf-8') as f:
                 for line in f:
                     parts = line.strip().split(';')
@@ -471,7 +420,6 @@ class CementSilosWindow:
                             parts.append('')
                         rows.append(parts[:2])
         
-        # Пропуск заголовка
         if rows:
             first = rows[0][0].strip().lower()
             header_keywords = [

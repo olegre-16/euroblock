@@ -1,10 +1,10 @@
 """
 Окно "Касса" - учёт кассовых операций
 Оформление идентично окну "Производство продукции".
-[ИЗМЕНЕНО] Все messagebox заменены на методы базового класса.
+[ИЗМЕНЕНО] Уменьшен hardcoded шрифт в balance_label.
 """
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 from datetime import datetime
 from config.settings import COLORS, FONTS, PADDING, SIZES
 from database.repositories import cash_repo
@@ -45,7 +45,7 @@ class CashWindow(BaseToplevelWindow):
         
         # Кнопки
         buttons_frame = tk.Frame(left_inner, bg=COLORS['panel_bg'])
-        buttons_frame.pack(fill=tk.X, padx=0, pady=(10, 5))
+        buttons_frame.pack(fill=tk.X, padx=10, pady=(10, 5))
         
         self.save_btn = self.add_button(buttons_frame, "Сохранить", self.save_operation,
                                         color=COLORS['button_primary'])
@@ -73,7 +73,9 @@ class CashWindow(BaseToplevelWindow):
         self.tree = ttk.Treeview(
             tree_container,
             columns=('date', 'income', 'expense'),
-            show='headings', yscrollcommand=scrollbar_y.set, selectmode='browse'
+            show='headings',
+            yscrollcommand=scrollbar_y.set,
+            selectmode='browse'
         )
         self.tree.heading('date', text='Дата', anchor='w')
         self.tree.heading('income', text='Приход, руб.', anchor='w')
@@ -94,9 +96,11 @@ class CashWindow(BaseToplevelWindow):
             fill=tk.X, pady=(0, 10)
         )
         
+        # [ИЗМЕНЕНО] Уменьшен шрифт с 12 до 10
         self.balance_label = tk.Label(
             self.summary_frame, text="Остаток, руб.: 0",
-            font=('Arial', 12, 'bold'), bg=COLORS['panel_bg'],
+            font=('Arial', 10, 'bold'),  # было ('Arial', 12, 'bold')
+            bg=COLORS['panel_bg'],
             fg=COLORS['title_text'], anchor='w'
         )
         self.balance_label.pack(fill=tk.X, padx=10, pady=(0, 5))
@@ -177,28 +181,28 @@ class CashWindow(BaseToplevelWindow):
         expense_str = self.expense_entry.get().strip()
         
         if not date_str:
-            self.show_warning("Внимание", "Укажите дату")
+            messagebox.showwarning("Внимание", "Укажите дату")
             return
         try:
             datetime.strptime(date_str, '%d.%m.%Y')
         except ValueError:
-            self.show_warning("Внимание", "Неверный формат даты. Используйте ДД.ММ.ГГГГ")
+            messagebox.showwarning("Внимание", "Неверный формат даты. Используйте ДД.ММ.ГГГГ")
             return
         
         if not income_str and not expense_str:
-            self.show_warning("Внимание", "Укажите приход или расход")
+            messagebox.showwarning("Внимание", "Укажите приход или расход")
             return
         
         try:
             income = float(income_str.replace(',', '.')) if income_str else 0
         except ValueError:
-            self.show_warning("Внимание", "Неверный формат прихода")
+            messagebox.showwarning("Внимание", "Неверный формат прихода")
             return
         
         try:
             expense = float(expense_str.replace(',', '.')) if expense_str else 0
         except ValueError:
-            self.show_warning("Внимание", "Неверный формат расхода")
+            messagebox.showwarning("Внимание", "Неверный формат расхода")
             return
         
         success, message = cash_repo.add(date_str, income, expense)
@@ -208,7 +212,7 @@ class CashWindow(BaseToplevelWindow):
             self.load_operations()
             self.income_entry.focus_set()
         else:
-            self.show_error("Ошибка", message)
+            messagebox.showerror("Ошибка", message)
     
     def load_operations(self):
         for item in self.tree.get_children():
@@ -281,12 +285,12 @@ class CashWindow(BaseToplevelWindow):
     def delete_selected_cell(self):
         selected = self.tree.selection()
         if not selected:
-            self.show_warning("Внимание", "Выберите ячейку для удаления")
+            messagebox.showwarning("Внимание", "Выберите ячейку для удаления")
             return
         
         item_id = selected[0]
         if item_id.startswith('total_') or item_id.startswith('turnover_'):
-            self.show_warning(
+            messagebox.showwarning(
                 "Внимание",
                 "Выберите конкретное значение прихода или расхода для удаления"
             )
@@ -298,7 +302,7 @@ class CashWindow(BaseToplevelWindow):
         
         actual_date = self._get_date_from_group(item_id)
         if not actual_date:
-            self.show_error("Ошибка", "Не удалось определить дату записи")
+            messagebox.showerror("Ошибка", "Не удалось определить дату записи")
             return
         
         income_val_str = values[1]
@@ -310,7 +314,7 @@ class CashWindow(BaseToplevelWindow):
         has_expense = exp_float is not None and exp_float != 0
         
         if not has_income and not has_expense:
-            self.show_warning("Внимание", "В выбранной строке нет значений для удаления")
+            messagebox.showwarning("Внимание", "В выбранной строке нет значений для удаления")
             return
         
         target_type = None
@@ -342,10 +346,10 @@ class CashWindow(BaseToplevelWindow):
                     break
         
         if not target_op_id:
-            self.show_error("Ошибка", "Не найдена запись для удаления")
+            messagebox.showerror("Ошибка", "Не найдена запись для удаления")
             return
         
-        if not self.ask_yes_no(
+        if not messagebox.askyesno(
             "Подтверждение",
             f"Удалить значение?\n\nДата: {actual_date}\n{target_desc}"
         ):
@@ -354,9 +358,9 @@ class CashWindow(BaseToplevelWindow):
         success, message = cash_repo.clear_field(target_op_id, target_type)
         if success:
             self.load_operations()
-            self.show_info("Успех", message)
+            messagebox.showinfo("Успех", message)
         else:
-            self.show_error("Ошибка", message)
+            messagebox.showerror("Ошибка", message)
     
     def _get_date_from_group(self, item_id):
         children = self.tree.get_children()
@@ -368,7 +372,6 @@ class CashWindow(BaseToplevelWindow):
         return None
     
     def _ask_what_to_delete(self, income_val_str, expense_val_str):
-        """Собственный диалог выбора — не трогаем, он на Toplevel"""
         dialog = tk.Toplevel(self.window)
         dialog.title("Что удалить?")
         dialog.configure(bg=COLORS['panel_bg'])

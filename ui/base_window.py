@@ -2,7 +2,7 @@
 Базовый класс для всех окон программы.
 Все окна открываются сразу на полный экран.
 Единое оформление как в окне "Производство продукции".
-[ИЗМЕНЕНО] Добавлены методы-обёртки для messagebox, предотвращающие сворачивание окон.
+[ИЗМЕНЕНО] Добавлены методы-обёртки для messagebox и _restore_window_state.
 """
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -46,9 +46,7 @@ class BaseToplevelWindow:
     def _prepare_for_messagebox(self):
         """Подготовить окно перед показом messagebox"""
         try:
-            # Делаем окно topmost, чтобы messagebox был поверх
             self.window.attributes('-topmost', True)
-            # Обновляем окно
             self.window.update_idletasks()
         except tk.TclError:
             pass
@@ -104,7 +102,28 @@ class BaseToplevelWindow:
         return result
     
     # ========================================================================
-    # Остальные методы базового класса
+    # [НОВОЕ] Метод восстановления состояния окна
+    # ========================================================================
+    def _restore_window_state(self):
+        """
+        Восстановить окно в полноэкранном режиме.
+        Вызывать после операций для гарантии, что окно открыто.
+        """
+        try:
+            if self.window.state() == 'iconic':
+                self.window.deiconify()
+            self.window.state('zoomed')
+            self.window.lift()
+            self.window.focus_force()
+            self.window.attributes('-topmost', True)
+            self.window.after(100, lambda: self.window.attributes('-topmost', False))
+        except tk.TclError:
+            pass
+        except Exception as e:
+            print(f"⚠ Ошибка восстановления окна: {e}")
+    
+    # ========================================================================
+    # Остальные методы
     # ========================================================================
     def _on_close(self):
         """Закрытие окна"""
@@ -128,27 +147,16 @@ class BaseToplevelWindow:
             width = self.LEFT_PANEL_WIDTH
         
         left_frame = tk.Frame(
-            parent_frame,
-            bg=COLORS['panel_bg'],
-            relief=tk.RAISED,
-            bd=SIZES['panel_border'],
-            width=width
+            parent_frame, bg=COLORS['panel_bg'],
+            relief=tk.RAISED, bd=SIZES['panel_border'], width=width
         )
         left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, PADDING['main']))
         left_frame.pack_propagate(False)
         
-        canvas = tk.Canvas(
-            left_frame,
-            bg=COLORS['panel_bg'],
-            highlightthickness=0
-        )
+        canvas = tk.Canvas(left_frame, bg=COLORS['panel_bg'], highlightthickness=0)
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
-        scrollbar = ttk.Scrollbar(
-            left_frame,
-            orient=tk.VERTICAL,
-            command=canvas.yview
-        )
+        scrollbar = ttk.Scrollbar(left_frame, orient=tk.VERTICAL, command=canvas.yview)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
         canvas.configure(yscrollcommand=scrollbar.set)
@@ -184,10 +192,8 @@ class BaseToplevelWindow:
     def create_right_panel(self, parent_frame):
         """Создать правую панель"""
         right_frame = tk.Frame(
-            parent_frame,
-            bg=COLORS['panel_bg'],
-            relief=tk.RAISED,
-            bd=SIZES['panel_border']
+            parent_frame, bg=COLORS['panel_bg'],
+            relief=tk.RAISED, bd=SIZES['panel_border']
         )
         right_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         return right_frame
@@ -198,11 +204,8 @@ class BaseToplevelWindow:
         title_frame.pack(fill=tk.X, padx=PADDING['main'], pady=PADDING['main'])
         
         title_label = tk.Label(
-            title_frame,
-            text=title_text,
-            font=FONTS['section_title'],
-            bg=COLORS['background'],
-            fg=COLORS['title_text']
+            title_frame, text=title_text,
+            font=FONTS['section_title'], bg=COLORS['background'], fg=COLORS['title_text']
         )
         title_label.pack(anchor='w')
         
@@ -220,13 +223,9 @@ class BaseToplevelWindow:
     def add_field_label(self, parent, text):
         """Добавить метку поля."""
         lbl = tk.Label(
-            parent,
-            text=text,
-            font=FONTS['field'],
-            bg=COLORS['panel_bg'],
-            fg=COLORS['title_text'],
-            anchor='w',
-            justify='left'
+            parent, text=text, font=FONTS['field'],
+            bg=COLORS['panel_bg'], fg=COLORS['title_text'],
+            anchor='w', justify='left'
         )
         lbl.pack(fill=tk.X, anchor='w', padx=10, pady=(5, 2))
         return lbl
@@ -237,16 +236,9 @@ class BaseToplevelWindow:
             color = COLORS['button_primary']
         
         btn = tk.Button(
-            parent,
-            text=text,
-            font=FONTS['menu'],
-            command=command,
-            bg=color,
-            fg=COLORS['button_text'],
-            relief=tk.FLAT,
-            padx=PADDING['button_x'],
-            pady=PADDING['button_y'],
-            cursor='hand2'
+            parent, text=text, font=FONTS['menu'], command=command,
+            bg=color, fg=COLORS['button_text'], relief=tk.FLAT,
+            padx=PADDING['button_x'], pady=PADDING['button_y'], cursor='hand2'
         )
         
         if side == tk.BOTTOM:

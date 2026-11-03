@@ -1,6 +1,7 @@
 """
 Кастомные messagebox с шрифтом основного текста программы.
 Заменяют стандартный tkinter.messagebox для единообразия оформления.
+[ИЗМЕНЕНО] Уменьшен hardcoded шрифт иконки.
 """
 import tkinter as tk
 from config.settings import COLORS, FONTS, SIZES
@@ -11,23 +12,16 @@ class CustomMessageBox:
     
     @staticmethod
     def _show_dialog(parent, title, message, buttons, icon_type, icon_color, bg_color):
-        """
-        Базовый метод для показа диалога.
-        buttons: список кортежей (текст, возвращаемое_значение, цвет_кнопки, цвет_текста)
-        """
         dialog = tk.Toplevel(parent)
         dialog.title(title)
         dialog.configure(bg=bg_color)
         dialog.resizable(False, False)
         
-        # Делаем модальным
         dialog.transient(parent)
         dialog.grab_set()
         
-        # Результат
         result = [None]
         
-        # Центрирование относительно родителя
         dialog.update_idletasks()
         parent_x = parent.winfo_rootx()
         parent_y = parent.winfo_rooty()
@@ -39,25 +33,26 @@ class CustomMessageBox:
         
         x = parent_x + (parent_w - dialog_w) // 2
         y = parent_y + (parent_h - dialog_h) // 2
+        
         dialog.geometry(f"{dialog_w}x{dialog_h}+{x}+{y}")
         
-        # Иконка (большой символ)
         icons = {
             'info': '✓',
             'warning': '⚠',
             'error': '✗',
             'question': '?'
         }
+        
+        # [ИЗМЕНЕНО] Уменьшен шрифт иконки с 36 до 34
         icon_label = tk.Label(
             dialog,
             text=icons.get(icon_type, '•'),
-            font=('Arial', 36, 'bold'),
+            font=('Arial', 34, 'bold'),  # было ('Arial', 36, 'bold')
             bg=bg_color,
             fg=icon_color
         )
         icon_label.pack(pady=(15, 5))
         
-        # Заголовок
         title_label = tk.Label(
             dialog,
             text=title,
@@ -67,7 +62,6 @@ class CustomMessageBox:
         )
         title_label.pack(pady=(0, 5))
         
-        # Сообщение
         msg_label = tk.Label(
             dialog,
             text=message,
@@ -79,7 +73,6 @@ class CustomMessageBox:
         )
         msg_label.pack(pady=(0, 15), padx=20)
         
-        # Кнопки
         btn_frame = tk.Frame(dialog, bg=bg_color)
         btn_frame.pack(pady=(0, 15))
         
@@ -102,20 +95,14 @@ class CustomMessageBox:
             )
             btn.pack(side=tk.LEFT, padx=5)
         
-        # Закрытие по Escape — возвращает первое значение (обычно False/None)
         dialog.bind('<Escape>', lambda e: on_button(buttons[-1][1] if len(buttons) > 1 else buttons[0][1]))
-        
-        # Обработчик закрытия окна
         dialog.protocol("WM_DELETE_WINDOW", lambda: on_button(buttons[-1][1] if len(buttons) > 1 else buttons[0][1]))
         
-        # Ждём закрытия
         dialog.wait_window()
-        
         return result[0]
     
     @staticmethod
     def showinfo(parent, title, message):
-        """Показать информационное сообщение"""
         buttons = [("OK", True, COLORS['button_primary'], COLORS['button_text'])]
         return CustomMessageBox._show_dialog(
             parent, title, message, buttons,
@@ -124,7 +111,6 @@ class CustomMessageBox:
     
     @staticmethod
     def showwarning(parent, title, message):
-        """Показать предупреждение"""
         buttons = [("OK", True, COLORS['button_primary'], COLORS['button_text'])]
         return CustomMessageBox._show_dialog(
             parent, title, message, buttons,
@@ -133,7 +119,6 @@ class CustomMessageBox:
     
     @staticmethod
     def showerror(parent, title, message):
-        """Показать ошибку"""
         buttons = [("OK", True, COLORS['button_exit'], COLORS['button_text'])]
         return CustomMessageBox._show_dialog(
             parent, title, message, buttons,
@@ -142,7 +127,6 @@ class CustomMessageBox:
     
     @staticmethod
     def askyesno(parent, title, message):
-        """Задать вопрос Да/Нет. Возвращает True/False"""
         buttons = [
             ("Да", True, COLORS['button_primary'], COLORS['button_text']),
             ("Нет", False, COLORS['button_settings'], COLORS['button_text'])
@@ -154,7 +138,6 @@ class CustomMessageBox:
     
     @staticmethod
     def askokcancel(parent, title, message):
-        """Задать вопрос OK/Отмена. Возвращает True/False"""
         buttons = [
             ("OK", True, COLORS['button_primary'], COLORS['button_text']),
             ("Отмена", False, COLORS['button_settings'], COLORS['button_text'])

@@ -1,6 +1,12 @@
-# Настройки оформления программы "ООО Евроблок"
+"""
+Настройки оформления программы "ООО Евроблок"
+[ИЗМЕНЕНО] Все шрифты уменьшены на 2 пункта.
+Уменьшены отступы полей и кнопок.
+"""
 
-# Цвета
+# ============================================================================
+# ЦВЕТА
+# ============================================================================
 COLORS = {
     'background': '#f0f0f0',
     'panel_bg': '#ffffff',
@@ -27,40 +33,57 @@ COLORS = {
     'silo_fill_critical': '#e74c3c',
     'silo_border': '#2c3e50',
     'silo_empty': '#ecf0f1',
-    'calendar_today': '#e8e8e8',          # ← изменён: светло-серый для подсветки текущей даты
-    'calendar_today_fg': '#2c3e50',       # ← добавлен: цвет текста текущей даты
+    'calendar_today': '#e8e8e8',
+    'calendar_today_fg': '#2c3e50',
     'calendar_selected': '#2980b9',
     'calendar_weekend': '#e74c3c',
+    # Цвета для кастомных messagebox
+    'msg_icon_info': '#27ae60',
+    'msg_icon_warning': '#f39c12',
+    'msg_icon_error': '#e74c3c',
+    'msg_icon_question': '#3498db',
+    'msg_info_bg': '#ffffff',
+    'msg_warning_bg': '#fff9e6',
+    'msg_error_bg': '#fdecea',
+    'msg_question_bg': '#e8f4fd',
 }
 
-# Шрифты
+# ============================================================================
+# ШРИФТЫ (все уменьшены на 2 пункта)
+# ============================================================================
 FONTS = {
-    'title': ('Arial', 24, 'bold'),
-    'subtitle': ('Arial', 14),
-    'menu': ('Arial', 11),
-    'field': ('Arial', 11),
-    'work_area': ('Arial', 11),
-    'section_title': ('Arial', 18, 'bold'),
-    'table_heading': ('Arial', 11, 'bold'),
-    'table_cell': ('Arial', 11),
-    'silo_label': ('Arial', 11, 'bold'),
-    'silo_value': ('Arial', 11, 'bold'),
-    'calendar_day': ('Arial', 11),
-    'calendar_header': ('Arial', 11, 'bold'),
-    'hint': ('Arial', 10),
+    'title': ('Arial', 22, 'bold'),           # было 24
+    'subtitle': ('Arial', 12),                # было 14
+    'menu': ('Arial', 9),                     # было 11
+    'field': ('Arial', 9),                    # было 11
+    'work_area': ('Arial', 9),                # было 11
+    'section_title': ('Arial', 16, 'bold'),   # было 18
+    'table_heading': ('Arial', 9, 'bold'),    # было 11
+    'table_cell': ('Arial', 9),               # было 11
+    'silo_label': ('Arial', 9, 'bold'),       # было 11
+    'silo_value': ('Arial', 9, 'bold'),       # было 11
+    'calendar_day': ('Arial', 9),             # было 11
+    'calendar_header': ('Arial', 9, 'bold'),  # было 11
+    'hint': ('Arial', 8),                     # было 10
+    'messagebox_title': ('Arial', 12, 'bold'),  # было 14
+    'messagebox_text': ('Arial', 10),           # было 12
 }
 
-# Отступы
+# ============================================================================
+# ОТСТУПЫ (уменьшены)
+# ============================================================================
 PADDING = {
     'main': 20,
-    'button_x': 10,
-    'button_y': 6,
+    'button_x': 8,              # было 10
+    'button_y': 4,              # было 6
     'button_spacing': 3,
     'exit_spacing_top': 15,
     'title_subtitle': 5,
 }
 
-# Размеры
+# ============================================================================
+# РАЗМЕРЫ (уменьшены)
+# ============================================================================
 SIZES = {
     'button_width_extra': 0,
     'panel_border': 1,
@@ -68,5 +91,6 @@ SIZES = {
     'silo_height': 150,
     'silo_spacing': 20,
     'silo_top_margin': 30,
-    'field_ipady': 4,
+    'field_ipady': 2,           # было 4
+    'messagebox_width': 380,
 }
