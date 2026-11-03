@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.spec
+
+# Виртуальное окружение
+venv/
+ENV/
+.venv/
+
+# База данных (НЕ загружаем БД на GitHub!)
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+backups/
+
+# Файлы уведомлений и блокировок
+*.notifications
+*.locks
+
+# Логи
+*.log
+performance.log
+maintenance.log
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.swp
+*.suo
+*.user
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Временные файлы
+*.tmp
+*.temp
