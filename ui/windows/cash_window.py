@@ -1,9 +1,7 @@
 """
 Окно "Касса" - учёт кассовых операций
 Оформление идентично окну "Производство продукции".
-[ИЗМЕНЕНО]
-- Кнопки "Сохранить" и "Удалить" теперь той же ширины, что и "Выход"
-- В табличной части дни чередуются по цвету (светло-серый / белый)
+[ИЗМЕНЕНО] При открытии окна сразу показывается реальный остаток.
 """
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -45,8 +43,7 @@ class CashWindow(BaseToplevelWindow):
         self.expense_entry.pack(fill=tk.X, padx=10, pady=(0, 8), ipady=SIZES['field_ipady'])
         self.expense_entry.bind('<KeyRelease>', self._validate_number)
         
-        # [ИЗМЕНЕНО] Убран padx=10 у buttons_frame, чтобы кнопки внутри
-        # имели только один padx=10 от add_button (как у кнопки "Выход")
+        # Кнопки
         buttons_frame = tk.Frame(left_inner, bg=COLORS['panel_bg'])
         buttons_frame.pack(fill=tk.X, padx=0, pady=(10, 5))
         
@@ -89,7 +86,7 @@ class CashWindow(BaseToplevelWindow):
         scrollbar_y.config(command=self.tree.yview)
         self.tree.pack(fill=tk.BOTH, expand=True)
         
-        # [НОВОЕ] Настраиваем теги для чередования цветов по дням
+        # Настраиваем теги для чередования цветов по дням
         self.tree.tag_configure('gray_day', background='#f0f0f0')
         self.tree.tag_configure('white_day', background='#ffffff')
         
@@ -131,6 +128,7 @@ class CashWindow(BaseToplevelWindow):
         self._update_summary_for_item(selected[0])
     
     def _update_summary_for_item(self, item_id):
+        """Обновить остаток при выборе конкретной строки"""
         values = self.tree.item(item_id, 'values')
         if not values:
             self._clear_summary()
@@ -158,7 +156,29 @@ class CashWindow(BaseToplevelWindow):
         balance = cash_repo.get_balance_up_to_date(date_str)
         self.balance_label.config(text=f"Остаток, руб.: {self._format_money(balance)}")
     
+    # [НОВОЕ] Метод для вычисления общего остатка
+    def _update_total_balance(self):
+        """
+        Вычислить и отобразить общий остаток по всем операциям.
+        Вызывается при загрузке окна и после изменения данных.
+        """
+        try:
+            operations = cash_repo.get_all()
+            total_income = 0
+            total_expense = 0
+            
+            for op_id, date, income, expense in operations:
+                total_income += income or 0
+                total_expense += expense or 0
+            
+            balance = total_income - total_expense
+            self.balance_label.config(text=f"Остаток, руб.: {self._format_money(balance)}")
+        except Exception as e:
+            print(f"Ошибка вычисления остатка: {e}")
+            self.balance_label.config(text="Остаток, руб.: 0")
+    
     def _clear_summary(self):
+        """Сбросить остаток к нулю"""
         self.balance_label.config(text="Остаток, руб.: 0")
     
     def _format_money(self, value):
@@ -220,7 +240,6 @@ class CashWindow(BaseToplevelWindow):
         else:
             messagebox.showerror("Ошибка", message)
     
-    # [ИЗМЕНЕНО] Добавлено чередование цветов по дням
     def load_operations(self):
         """Загрузить данные в таблицу с чередованием цветов по дням"""
         for item in self.tree.get_children():
@@ -246,12 +265,11 @@ class CashWindow(BaseToplevelWindow):
         sorted_dates = sorted(grouped_by_date.keys(), 
                               key=lambda d: date_to_comparable(d), reverse=True)
         
-        # [НОВОЕ] Счётчик дней для чередования цветов
+        # Счётчик дней для чередования цветов
         day_index = 0
         
         for date in sorted_dates:
-            # [НОВОЕ] Определяем тег цвета для этого дня
-            # Чётные дни (0, 2, 4...) — светло-серый, нечётные (1, 3, 5...) — белый
+            # Определяем тег цвета для этого дня
             day_tag = 'gray_day' if day_index % 2 == 0 else 'white_day'
             day_index += 1
             
@@ -268,7 +286,6 @@ class CashWindow(BaseToplevelWindow):
             if num_rows == 0:
                 continue
             
-            # [ИЗМЕНЕНО] Добавлен tags=(day_tag,) ко всем строкам дня
             for i in range(num_rows):
                 date_display = date if i == 0 else ''
                 inc_val = ''
@@ -288,7 +305,6 @@ class CashWindow(BaseToplevelWindow):
             total_income = sum(item['value'] for item in incomes)
             total_expense = sum(item['value'] for item in expenses)
             
-            # [ИЗМЕНЕНО] Итоговая строка тоже с тегом цвета дня
             self.tree.insert(
                 '', 'end', iid=f"total_{date}",
                 values=("Итог", self._format_money(total_income), 
@@ -297,12 +313,14 @@ class CashWindow(BaseToplevelWindow):
             )
             
             turnover = total_income - total_expense
-            # [ИЗМЕНЕНО] Строка оборота тоже с тегом цвета дня
             self.tree.insert(
                 '', 'end', iid=f"turnover_{date}",
                 values=(f"Оборот за день: {self._format_money(turnover)} руб.", "", ""),
                 tags=(day_tag,)
             )
+        
+        # [НОВОЕ] Вычисляем и отображаем общий остаток
+        self._update_total_balance()
     
     def delete_selected_cell(self):
         selected = self.tree.selection()
