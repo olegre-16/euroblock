@@ -3,6 +3,9 @@
 Оформление идентично окну "Производство продукции".
 [ИЗМЕНЕНО]
 - Поставщик теперь список с автодополнением (AutocompleteCombobox)
+- Под полем "Поставщик" добавлена подсказка: "Пустое поле — корректировка"
+- Если поле "Поставщик" пустое → запись считается корректировкой
+- Корректировки в таблице выделяются светло-жёлтым цветом
 - Все messagebox заменены на методы базового класса (предотвращает сворачивание)
 - После операций окно гарантированно остаётся открытым
 """
@@ -21,7 +24,7 @@ class CementReceiptWindow(BaseToplevelWindow):
     """Окно поступления цемента"""
     def __init__(self, parent, on_exit_callback):
         self.silo_list = [row[0] for row in cement_silos_repo.get_all()]
-        # [НОВОЕ] Список поставщиков из справочника
+        # Список поставщиков из справочника
         self.supplier_list = [row[0] for row in suppliers_repo.get_all()]
         self.editing_id = None
         super().__init__(parent, on_exit_callback, title="Поступление цемента")
@@ -49,10 +52,21 @@ class CementReceiptWindow(BaseToplevelWindow):
         self.quantity_entry.pack(fill=tk.X, padx=10, pady=(0, 6), ipady=SIZES['field_ipady'])
         self.quantity_entry.bind('<KeyRelease>', self._validate_number)
         
-        # [ИЗМЕНЕНО] Поставщик теперь список с автодополнением
+        # Поставщик — список с автодополнением
         self.add_field_label(left_inner, "Поставщик:")
         self.supplier_combo = AutocompleteCombobox(left_inner, values=self.supplier_list)
-        self.supplier_combo.pack(fill=tk.X, padx=10, pady=(0, 8))
+        self.supplier_combo.pack(fill=tk.X, padx=10, pady=(0, 2))
+        
+        # [НОВОЕ] Подсказка под полем "Поставщик"
+        self.supplier_hint = tk.Label(
+            left_inner,
+            text="Пустое поле — корректировка",
+            font=FONTS['hint'],
+            bg=COLORS['panel_bg'],
+            fg=COLORS['work_area_text'],
+            anchor='w'
+        )
+        self.supplier_hint.pack(fill=tk.X, padx=10, pady=(0, 8))
         
         # ===== КНОПКИ =====
         self.save_btn = self.add_button(left_inner, "Сохранить", self.save_receipt,
@@ -118,6 +132,9 @@ class CementReceiptWindow(BaseToplevelWindow):
         scrollbar_y.config(command=self.tree.yview)
         self.tree.pack(fill=tk.BOTH, expand=True)
         
+        # [НОВОЕ] Настраиваем тег для корректировок — светло-жёлтый фон
+        self.tree.tag_configure('correction', background='#fff9c4')
+        
         self.load_receipts()
     
     def _validate_number(self, event=None):
@@ -153,7 +170,10 @@ class CementReceiptWindow(BaseToplevelWindow):
             return str(value)
     
     def load_receipts(self):
-        """Загрузить данные в таблицу"""
+        """
+        Загрузить данные в таблицу.
+        [ИЗМЕНЕНО] Корректировки выделяются светло-жёлтым цветом.
+        """
         for item in self.tree.get_children():
             self.tree.delete(item)
         
@@ -164,9 +184,20 @@ class CementReceiptWindow(BaseToplevelWindow):
             silo = row[2]
             quantity = row[3]
             supplier = row[4] if len(row) > 4 else ''
+            is_correction = row[5] if len(row) > 5 else 0
+            
+            # [НОВОЕ] Определяем отображение поставщика и тег
+            if is_correction == 1:
+                supplier_display = 'Корректировка'
+                tags = ('correction',)
+            else:
+                supplier_display = supplier or '—'
+                tags = ()
+            
             self.tree.insert(
                 '', 'end', iid=str(receipt_id),
-                values=(date, silo, self._format_number(quantity), supplier or '—')
+                values=(date, silo, self._format_number(quantity), supplier_display),
+                tags=tags
             )
         
         try:
@@ -190,7 +221,10 @@ class CementReceiptWindow(BaseToplevelWindow):
             print(f"Ошибка обновления визуализации силосов: {e}")
     
     def save_receipt(self):
-        """Сохранить новую запись"""
+        """
+        Сохранить новую запись.
+        [ИЗМЕНЕНО] Если поле "Поставщик" пустое — запись считается корректировкой.
+        """
         date_str = self.date_entry.get_date()
         silo = self.silo_combo.get().strip()
         quantity_str = self.quantity_entry.get().strip()
@@ -213,13 +247,16 @@ class CementReceiptWindow(BaseToplevelWindow):
             self.show_warning("Внимание", "Неверный формат данных")
             return
         
+        # [НОВОЕ] Определяем, является ли запись корректировкой
+        is_correction = (supplier == '')
+        
         if self.editing_id:
             success, message = cement_receipts_repo.update(
-                self.editing_id, date_str, silo, quantity, supplier
+                self.editing_id, date_str, silo, quantity, supplier, is_correction
             )
         else:
             success, message = cement_receipts_repo.add(
-                date_str, silo, quantity, supplier
+                date_str, silo, quantity, supplier, is_correction
             )
         
         if success:
@@ -241,7 +278,10 @@ class CementReceiptWindow(BaseToplevelWindow):
         self.save_btn.config(text="Сохранить")
     
     def edit_selected(self):
-        """Загрузить данные для редактирования"""
+        """
+        Загрузить данные для редактирования.
+        [ИЗМЕНЕНО] Для корректировок поле поставщика остаётся пустым.
+        """
         selected = self.tree.selection()
         if not selected:
             self.show_warning("Внимание", "Выберите запись")
@@ -255,11 +295,19 @@ class CementReceiptWindow(BaseToplevelWindow):
         silo = receipt[2]
         quantity = receipt[3]
         supplier = receipt[4] if len(receipt) > 4 else ''
+        is_correction = receipt[5] if len(receipt) > 5 else 0
+        
         self.date_entry.set_date(date)
         self.silo_combo.set(silo)
         self.quantity_entry.delete(0, tk.END)
         self.quantity_entry.insert(0, self._format_number(quantity))
-        self.supplier_combo.set(supplier or '')
+        
+        # [НОВОЕ] Для корректировок поле поставщика оставляем пустым
+        if is_correction == 1:
+            self.supplier_combo.clear()
+        else:
+            self.supplier_combo.set(supplier or '')
+        
         self.editing_id = receipt_id
         self.save_btn.config(text="Обновить")
         self._restore_window_state()
@@ -282,13 +330,16 @@ class CementReceiptWindow(BaseToplevelWindow):
         silo = receipt[2]
         quantity = receipt[3]
         supplier = receipt[4] if len(receipt) > 4 else ''
+        is_correction = receipt[5] if len(receipt) > 5 else 0
         
+        # Формируем текст подтверждения
+        record_type = "корректировку" if is_correction == 1 else "запись о поступлении"
         confirm_text = (
-            f"Удалить запись о поступлении цемента?\n\n"
+            f"Удалить {record_type}?\n\n"
             f"Дата: {date}\n"
             f"Силос: {silo}\n"
             f"Количество: {self._format_number(quantity)} кг\n"
-            f"Поставщик: {supplier or '—'}"
+            f"Поставщик: {supplier or '(корректировка)'}"
         )
         
         if not self.ask_yes_no("Подтверждение", confirm_text):
