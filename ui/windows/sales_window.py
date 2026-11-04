@@ -1,14 +1,14 @@
 """
 Окно "Реализация продукции" - учёт продаж продукции
 Оформление идентично окну "Производство продукции".
-[ИЗМЕНЕНО] Все messagebox заменены на методы базового класса.
+[ИЗМЕНЕНО] Кнопки "Сохранить", "Изменить", "Удалить" теперь той же ширины, что и "Выход".
 """
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 from datetime import datetime
 from config.settings import COLORS, FONTS, PADDING, SIZES
 from database.repositories import (
-    products_repo, colors_repo, sales_repo, equipment_repo
+    products_repo, colors_repo, sales_repo
 )
 from ui.widgets.date_entry import DateEntry
 from ui.widgets.combobox_autocomplete import AutocompleteCombobox
@@ -21,7 +21,6 @@ class SalesWindow(BaseToplevelWindow):
         all_products = products_repo.get_all()
         self.product_list = [row[0] for row in all_products]
         self.color_list = [row[0] for row in colors_repo.get_all()]
-        self.equipment_list = [row[0] for row in equipment_repo.get_all()]
         self.editing_sale_id = None
         super().__init__(parent, on_exit_callback, title="Реализация продукции")
     
@@ -34,17 +33,17 @@ class SalesWindow(BaseToplevelWindow):
         self.date_entry = DateEntry(left_inner)
         self.date_entry.pack(fill=tk.X, padx=10, pady=(10, 6))
         
-        self.add_field_label(left_inner, "Оборудование:")
-        self.equipment_combo = AutocompleteCombobox(left_inner, values=self.equipment_list)
-        self.equipment_combo.pack(fill=tk.X, padx=10, pady=(0, 6))
-        
         self.add_field_label(left_inner, "Продукция:")
-        self.product_combo = AutocompleteCombobox(left_inner, values=self.product_list)
+        self.product_combo = AutocompleteCombobox(
+            left_inner, values=self.product_list
+        )
         self.product_combo.pack(fill=tk.X, padx=10, pady=(0, 6))
         self.product_combo.bind_text_change(self._on_product_change)
         
         self.add_field_label(left_inner, "Цвет:")
-        self.color_combo = AutocompleteCombobox(left_inner, values=self.color_list)
+        self.color_combo = AutocompleteCombobox(
+            left_inner, values=self.color_list
+        )
         self.color_combo.pack(fill=tk.X, padx=10, pady=(0, 6))
         
         self.add_field_label(left_inner, "Кол-во., шт/м2:")
@@ -61,6 +60,8 @@ class SalesWindow(BaseToplevelWindow):
         self.price_entry.pack(fill=tk.X, padx=10, pady=(0, 8), ipady=SIZES['field_ipady'])
         self.price_entry.bind('<KeyRelease>', self._validate_number)
         
+        # [ИЗМЕНЕНО] Убран padx=10 у buttons_frame, чтобы кнопки внутри
+        # имели только один padx=10 от add_button (как у кнопки "Выход")
         buttons_frame = tk.Frame(left_inner, bg=COLORS['panel_bg'])
         buttons_frame.pack(fill=tk.X, padx=0, pady=(10, 5))
         
@@ -92,23 +93,23 @@ class SalesWindow(BaseToplevelWindow):
         
         self.tree = ttk.Treeview(
             tree_container,
-            columns=('date', 'equipment', 'product', 'color', 'quantity', 'price', 'total'),
-            show='headings', yscrollcommand=scrollbar_y.set, selectmode='browse'
+            columns=('date', 'product', 'color', 'quantity', 'price', 'total'),
+            show='headings',
+            yscrollcommand=scrollbar_y.set,
+            selectmode='browse'
         )
         self.tree.heading('date', text='Дата', anchor='w')
-        self.tree.heading('equipment', text='Оборудование', anchor='w')
         self.tree.heading('product', text='Продукция', anchor='w')
         self.tree.heading('color', text='Цвет', anchor='w')
         self.tree.heading('quantity', text='Кол-во, шт/м2', anchor='w')
         self.tree.heading('price', text='Цена, руб.', anchor='w')
         self.tree.heading('total', text='Сумма, руб.', anchor='w')
-        self.tree.column('date', width=90, anchor='w')
-        self.tree.column('equipment', width=120, anchor='w')
-        self.tree.column('product', width=200, anchor='w')
-        self.tree.column('color', width=90, anchor='w')
-        self.tree.column('quantity', width=110, anchor='w')
-        self.tree.column('price', width=110, anchor='w')
-        self.tree.column('total', width=120, anchor='w')
+        self.tree.column('date', width=100, anchor='w')
+        self.tree.column('product', width=250, anchor='w')
+        self.tree.column('color', width=100, anchor='w')
+        self.tree.column('quantity', width=120, anchor='w')
+        self.tree.column('price', width=120, anchor='w')
+        self.tree.column('total', width=130, anchor='w')
         scrollbar_y.config(command=self.tree.yview)
         self.tree.pack(fill=tk.BOTH, expand=True)
         
@@ -154,11 +155,10 @@ class SalesWindow(BaseToplevelWindow):
                 sale_id, date, product, color, quantity, price, equipment = row
             else:
                 sale_id, date, product, color, quantity, price = row
-                equipment = ''
             total = (quantity or 0) * (price or 0)
             self.tree.insert(
                 '', 'end', iid=str(sale_id),
-                values=(date, equipment or '—', product, color or '—',
+                values=(date, product, color or '—',
                         self._format_number(quantity), self._format_number(price),
                         self._format_number(total))
             )
@@ -178,20 +178,18 @@ class SalesWindow(BaseToplevelWindow):
     def edit_selected(self):
         selected = self.tree.selection()
         if not selected:
-            self.show_warning("Внимание", "Выберите запись для редактирования")
+            messagebox.showwarning("Внимание", "Выберите запись для редактирования")
             return
         sale_id = int(selected[0])
         sale = sales_repo.get_by_id(sale_id)
         if not sale:
-            self.show_error("Ошибка", "Запись не найдена")
+            messagebox.showerror("Ошибка", "Запись не найдена")
             return
         if len(sale) == 7:
             _, date, product, color, quantity, price, equipment = sale
         else:
             _, date, product, color, quantity, price = sale
-            equipment = ''
         self.date_entry.set_date(date)
-        self.equipment_combo.set(equipment or '')
         self.color_combo.set(color or '')
         self.product_combo.set(product)
         self.quantity_entry.delete(0, tk.END)
@@ -204,46 +202,44 @@ class SalesWindow(BaseToplevelWindow):
     
     def save_sale(self):
         date_str = self.date_entry.get_date()
-        equipment = self.equipment_combo.get().strip()
         product = self.product_combo.get().strip()
         color = self.color_combo.get().strip()
         quantity_str = self.quantity_entry.get().strip()
         price_str = self.price_entry.get().strip()
         
         if not date_str:
-            self.show_warning("Внимание", "Укажите дату")
+            messagebox.showwarning("Внимание", "Укажите дату")
             return
         try:
             datetime.strptime(date_str, '%d.%m.%Y')
         except ValueError:
-            self.show_warning("Внимание", "Неверный формат даты. Используйте ДД.ММ.ГГГГ")
+            messagebox.showwarning("Внимание", "Неверный формат даты. Используйте ДД.ММ.ГГГГ")
             return
         if not product:
-            self.show_warning("Внимание", "Выберите продукцию")
+            messagebox.showwarning("Внимание", "Выберите продукцию")
             return
         if not quantity_str or not price_str:
-            self.show_warning("Внимание", "Укажите количество и цену")
+            messagebox.showwarning("Внимание", "Укажите количество и цену")
             return
         try:
             quantity = float(quantity_str.replace(',', '.'))
             price = float(price_str.replace(',', '.'))
         except ValueError:
-            self.show_warning("Внимание", "Неверный формат числа")
+            messagebox.showwarning("Внимание", "Неверный формат числа")
             return
         
         if self.editing_sale_id:
             success, message = sales_repo.update(
-                self.editing_sale_id, date_str, product, color, quantity, price, equipment
+                self.editing_sale_id, date_str, product, color, quantity, price, None
             )
         else:
             success, message = sales_repo.add(
-                date_str, product, color, quantity, price, equipment
+                date_str, product, color, quantity, price, None
             )
         
         if success:
             self.product_combo.clear()
             self.color_combo.clear()
-            self.equipment_combo.clear()
             self.quantity_entry.delete(0, tk.END)
             self.price_entry.delete(0, tk.END)
             if self.editing_sale_id:
@@ -252,25 +248,24 @@ class SalesWindow(BaseToplevelWindow):
             self.load_sales()
             self.product_combo.focus_set()
         else:
-            self.show_error("Ошибка", message)
+            messagebox.showerror("Ошибка", message)
     
     def delete_selected(self):
         selected = self.tree.selection()
         if not selected:
-            self.show_warning("Внимание", "Выберите запись для удаления")
+            messagebox.showwarning("Внимание", "Выберите запись для удаления")
             return
         sale_id = int(selected[0])
         sale = sales_repo.get_by_id(sale_id)
         if not sale:
-            self.show_error("Ошибка", "Запись не найдена")
+            messagebox.showerror("Ошибка", "Запись не найдена")
             return
         if len(sale) == 7:
             _, date, product, color, quantity, price, equipment = sale
         else:
             _, date, product, color, quantity, price = sale
-            equipment = ''
         total = (quantity or 0) * (price or 0)
-        if not self.ask_yes_no(
+        if not messagebox.askyesno(
             "Подтверждение",
             f"Удалить запись о продаже?\n\n"
             f"Дата: {date}\nПродукция: {product}\n"
@@ -283,6 +278,6 @@ class SalesWindow(BaseToplevelWindow):
                 self.editing_sale_id = None
                 self.save_btn.config(text="Сохранить")
             self.load_sales()
-            self.show_info("Успех", message)
+            messagebox.showinfo("Успех", message)
         else:
-            self.show_error("Ошибка", message)
+            messagebox.showerror("Ошибка", message)

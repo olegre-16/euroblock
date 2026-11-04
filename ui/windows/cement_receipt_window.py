@@ -169,7 +169,6 @@ class CementReceiptWindow(BaseToplevelWindow):
                 values=(date, silo, self._format_number(quantity), supplier or '—')
             )
         
-        # Принудительное обновление UI
         try:
             self.tree.update()
             self.window.update_idletasks()
@@ -195,7 +194,7 @@ class CementReceiptWindow(BaseToplevelWindow):
         date_str = self.date_entry.get_date()
         silo = self.silo_combo.get().strip()
         quantity_str = self.quantity_entry.get().strip()
-        supplier = self.supplier_combo.get().strip()  # [ИЗМЕНЕНО] combobox вместо entry
+        supplier = self.supplier_combo.get().strip()
         
         if not date_str:
             self.show_warning("Внимание", "Укажите дату")
@@ -227,7 +226,6 @@ class CementReceiptWindow(BaseToplevelWindow):
             self._clear_fields()
             self.load_receipts()
             self.show_info("Успех", message)
-            # [НОВОЕ] Восстанавливаем состояние окна
             self._restore_window_state()
         else:
             self.show_error("Ошибка", message)
@@ -238,7 +236,7 @@ class CementReceiptWindow(BaseToplevelWindow):
         self.date_entry.clear()
         self.silo_combo.clear()
         self.quantity_entry.delete(0, tk.END)
-        self.supplier_combo.clear()  # [ИЗМЕНЕНО] combobox вместо entry
+        self.supplier_combo.clear()
         self.editing_id = None
         self.save_btn.config(text="Сохранить")
     
@@ -249,7 +247,6 @@ class CementReceiptWindow(BaseToplevelWindow):
             self.show_warning("Внимание", "Выберите запись")
             return
         receipt_id = int(selected[0])
-        # [ИЗМЕНЕНО] Используем алиас get_by_id
         receipt = cement_receipts_repo.get_by_id(receipt_id)
         if not receipt:
             self.show_error("Ошибка", "Запись не найдена")
@@ -262,10 +259,9 @@ class CementReceiptWindow(BaseToplevelWindow):
         self.silo_combo.set(silo)
         self.quantity_entry.delete(0, tk.END)
         self.quantity_entry.insert(0, self._format_number(quantity))
-        self.supplier_combo.set(supplier or '')  # [ИЗМЕНЕНО] combobox вместо entry
+        self.supplier_combo.set(supplier or '')
         self.editing_id = receipt_id
         self.save_btn.config(text="Обновить")
-        # [НОВОЕ] Восстанавливаем состояние окна
         self._restore_window_state()
     
     def delete_selected(self):
@@ -277,7 +273,6 @@ class CementReceiptWindow(BaseToplevelWindow):
         
         receipt_id = int(selected[0])
         
-        # Получаем данные записи для отображения в подтверждении
         receipt = cement_receipts_repo.get_by_id(receipt_id)
         if not receipt:
             self.show_error("Ошибка", "Запись не найдена")
@@ -288,7 +283,6 @@ class CementReceiptWindow(BaseToplevelWindow):
         quantity = receipt[3]
         supplier = receipt[4] if len(receipt) > 4 else ''
         
-        # Формируем текст подтверждения
         confirm_text = (
             f"Удалить запись о поступлении цемента?\n\n"
             f"Дата: {date}\n"
@@ -297,24 +291,16 @@ class CementReceiptWindow(BaseToplevelWindow):
             f"Поставщик: {supplier or '—'}"
         )
         
-        # [ИЗМЕНЕНО] Используем self.ask_yes_no вместо messagebox.askyesno
         if not self.ask_yes_no("Подтверждение", confirm_text):
             return
         
-        # [ИЗМЕНЕНО] Используем алиас delete(), который возвращает (success, message)
         success, message = cement_receipts_repo.delete(receipt_id)
         
         if success:
             if self.editing_id == receipt_id:
                 self._clear_fields()
-            
-            # Перезагружаем таблицу и визуализацию силосов
             self.load_receipts()
-            
-            # [ИЗМЕНЕНО] Используем self.show_info вместо messagebox.showinfo
             self.show_info("Успех", message)
-            
-            # [НОВОЕ] Восстанавливаем состояние окна
             self._restore_window_state()
         else:
             self.show_error("Ошибка", message)

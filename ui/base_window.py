@@ -2,7 +2,8 @@
 Базовый класс для всех окон программы.
 Все окна открываются сразу на полный экран.
 Единое оформление как в окне "Производство продукции".
-[ИЗМЕНЕНО] Добавлены методы-обёртки для messagebox и _restore_window_state.
+[ИЗМЕНЕНО] Полностью отключена прокрутка левой панели колесом мыши.
+Скроллбар работает только через клик и перетаскивание.
 """
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -40,8 +41,7 @@ class BaseToplevelWindow:
         pass
     
     # ========================================================================
-    # [НОВОЕ] Методы-обёртки для messagebox
-    # Предотвращают сворачивание окна при показе диалогов
+    # Методы-обёртки для messagebox
     # ========================================================================
     def _prepare_for_messagebox(self):
         """Подготовить окно перед показом messagebox"""
@@ -54,21 +54,12 @@ class BaseToplevelWindow:
     def _restore_after_messagebox(self):
         """Восстановить состояние окна после показа messagebox"""
         try:
-            # Если окно свернулось — разворачиваем
             if self.window.state() == 'iconic':
                 self.window.deiconify()
-            
-            # Возвращаем полноэкранный режим
             self.window.state('zoomed')
-            
-            # Снимаем topmost
             self.window.attributes('-topmost', False)
-            
-            # Поднимаем окно на передний план
             self.window.lift()
             self.window.focus_force()
-            
-            # Обновляем окно
             self.window.update_idletasks()
         except tk.TclError:
             pass
@@ -101,14 +92,8 @@ class BaseToplevelWindow:
         self._restore_after_messagebox()
         return result
     
-    # ========================================================================
-    # [НОВОЕ] Метод восстановления состояния окна
-    # ========================================================================
     def _restore_window_state(self):
-        """
-        Восстановить окно в полноэкранном режиме.
-        Вызывать после операций для гарантии, что окно открыто.
-        """
+        """Восстановить окно в полноэкранном режиме"""
         try:
             if self.window.state() == 'iconic':
                 self.window.deiconify()
@@ -123,7 +108,7 @@ class BaseToplevelWindow:
             print(f"⚠ Ошибка восстановления окна: {e}")
     
     # ========================================================================
-    # Остальные методы
+    # Остальные методы базового класса
     # ========================================================================
     def _on_close(self):
         """Закрытие окна"""
@@ -142,7 +127,11 @@ class BaseToplevelWindow:
         return self.window
     
     def create_left_panel_with_scroll(self, parent_frame, width=None):
-        """Создать левую панель с прокруткой."""
+        """
+        Создать левую панель с прокруткой.
+        [ИЗМЕНЕНО] Прокрутка колесом мыши ПОЛНОСТЬЮ ОТКЛЮЧЕНА.
+        Скроллбар работает только через клик и перетаскивание мышью.
+        """
         if width is None:
             width = self.LEFT_PANEL_WIDTH
         
@@ -177,11 +166,11 @@ class BaseToplevelWindow:
         
         canvas.bind('<Configure>', _on_canvas_configure)
         
-        def _on_mousewheel(event):
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), 'units')
+        # [ИЗМЕНЕНО] Прокрутка колесом мыши ПОЛНОСТЬЮ ОТКЛЮЧЕНА.
+        # Нет привязок <MouseWheel> ни к canvas, ни к inner_frame, ни к left_frame.
+        # Скроллбар работает только через клик и перетаскивание мышью.
         
-        canvas.bind_all('<MouseWheel>', _on_mousewheel)
-        
+        # Сохраняем ссылки
         self._scroll_canvas = canvas
         self._scroll_inner_frame = inner_frame
         self._scroll_left_frame = left_frame

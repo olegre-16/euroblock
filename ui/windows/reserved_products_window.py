@@ -205,8 +205,10 @@ class ReservedProductsWindow(BaseToplevelWindow):
         if success:
             self._clear_fields()
             self.load_reservations()
+            self._restore_window_state()
         else:
             self.show_error("Ошибка", message)
+            self._restore_window_state()
     
     def _clear_fields(self):
         self.start_date_entry.clear()
@@ -238,6 +240,7 @@ class ReservedProductsWindow(BaseToplevelWindow):
         self.customer_combo.set(customer or '')
         self.editing_id = res_id
         self.save_btn.config(text="Обновить")
+        self._restore_window_state()
     
     def delete_selected(self):
         selected = self.tree.selection()
@@ -264,5 +267,7 @@ class ReservedProductsWindow(BaseToplevelWindow):
                 self._clear_fields()
             self.load_reservations()
             self.show_info("Успех", message)
+            self._restore_window_state()
         else:
             self.show_error("Ошибка", message)
+            self._restore_window_state()

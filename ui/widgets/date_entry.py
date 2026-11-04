@@ -1,13 +1,6 @@
 """
 Кастомный виджет выбора даты (календарь).
-
-Логика работы:
-- Поле ввода изначально пустое
-- Клик на поле ввода НЕ открывает календарь (можно редактировать вручную)
-- Клик на кнопку 📅 открывает/закрывает календарь
-- При получении фокуса полем ввода календарь закрывается (если был открыт)
-- При выборе даты в календаре она записывается в поле, календарь закрывается
-- Текущая дата подсвечивается светло-серым цветом
+[ИЗМЕНЕНО] Блокировка прокрутки родительской панели при работе с календарём.
 """
 import tkinter as tk
 from datetime import datetime
@@ -51,13 +44,23 @@ class DateEntry(tk.Frame):
             cursor='hand2'
         )
         self.btn.pack(side=tk.RIGHT, padx=(3, 0))
+        
         self.btn.bind('<Enter>', lambda e: self.btn.config(bg=COLORS['button_primary_hover']))
         self.btn.bind('<Leave>', lambda e: self.btn.config(bg=COLORS['button_primary']))
+        
+        # [НОВОЕ] Блокируем прокрутку колесом на entry и btn
+        self.entry.bind('<MouseWheel>', self._block_mousewheel)
+        self.btn.bind('<MouseWheel>', self._block_mousewheel)
+        self.bind('<MouseWheel>', self._block_mousewheel)
+    
+    # [НОВОЕ] Блокировка прокрутки
+    def _block_mousewheel(self, event):
+        """Блокировать прокрутку колесом мыши"""
+        return 'break'
     
     # ===== Публичные методы =====
-    
     def get_date(self):
-        """Получить выбранную дату в формате строки (может быть пустой)"""
+        """Получить выбранную дату в формате строки"""
         return self.entry.get().strip()
     
     def set_date(self, date_str):
@@ -75,14 +78,13 @@ class DateEntry(tk.Frame):
         self.selected_date = None
     
     def get_date_object(self):
-        """Получить дату как datetime объект (None если не выбрана)"""
+        """Получить дату как datetime объект"""
         try:
             return datetime.strptime(self.entry.get().strip(), self.date_format)
         except ValueError:
             return None
     
     # ===== Обработчики событий =====
-    
     def _on_entry_focus_in(self, event):
         """При получении фокуса полем ввода — закрываем календарь"""
         if self.popup and self.popup.winfo_exists():
@@ -96,7 +98,6 @@ class DateEntry(tk.Frame):
             self._show_popup()
     
     # ===== Работа с popup =====
-    
     def _show_popup(self):
         """Показать popup с календарём"""
         if self.popup and self.popup.winfo_exists():
@@ -104,11 +105,13 @@ class DateEntry(tk.Frame):
         
         x = self.winfo_rootx()
         y = self.winfo_rooty() + self.winfo_height() + 2
-        
         self.popup = tk.Toplevel(self)
         self.popup.wm_overrideredirect(True)
         self.popup.wm_geometry(f"+{x}+{y}")
         self.popup.configure(bg=COLORS['panel_bg'])
+        
+        # [НОВОЕ] Блокируем прокрутку на popup
+        self.popup.bind('<MouseWheel>', self._block_mousewheel)
         
         # Определяем отображаемый месяц/год
         if self.selected_date is None:
@@ -123,6 +126,7 @@ class DateEntry(tk.Frame):
         
         # Закрытие по Escape
         self.popup.bind('<Escape>', lambda e: self._close_popup())
+        
         # Возвращаем фокус на поле ввода
         self.entry.focus_set()
     
@@ -152,6 +156,7 @@ class DateEntry(tk.Frame):
             'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
             'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'
         ]
+        
         title = tk.Label(
             header,
             text=f"{month_names[self.view_month - 1]} {self.view_year}",
@@ -202,14 +207,12 @@ class DateEntry(tk.Frame):
                 else:
                     current_date = datetime(self.view_year, self.view_month, day).date()
                     
-                    # Определяем цвет дня
-                    # Приоритет: выбранная дата > текущая дата > выходные > обычный день
                     if self.selected_date is not None and current_date == self.selected_date.date():
                         bg_color = COLORS['calendar_selected']
                         fg_color = COLORS['button_text']
                     elif current_date == today:
-                        bg_color = COLORS['calendar_today']      # Светло-серый
-                        fg_color = COLORS['calendar_today_fg']   # Тёмный текст
+                        bg_color = COLORS['calendar_today']
+                        fg_color = COLORS['calendar_today_fg']
                     elif col_idx >= 5:
                         bg_color = COLORS['panel_bg']
                         fg_color = COLORS['calendar_weekend']
@@ -256,14 +259,14 @@ class DateEntry(tk.Frame):
             label.config(bg=original_bg)
     
     def _select_day(self, day):
-        """Выбрать день — записать в поле и закрыть календарь"""
+        """Выбрать день"""
         self.selected_date = datetime(self.view_year, self.view_month, day)
         self.entry.delete(0, tk.END)
         self.entry.insert(0, self.selected_date.strftime(self.date_format))
         self._close_popup()
     
     def _select_today(self):
-        """Выбрать сегодняшнюю дату и закрыть календарь"""
+        """Выбрать сегодняшнюю дату"""
         self.selected_date = datetime.now()
         self.view_year = self.selected_date.year
         self.view_month = self.selected_date.month

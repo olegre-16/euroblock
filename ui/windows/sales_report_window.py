@@ -1,10 +1,10 @@
 """
 Окно "Отчет по реализации" - отчет о продажах продукции
 Оформление идентично окну "Производство продукции".
-[ИЗМЕНЕНО] Все messagebox заменены на методы базового класса.
+[ИЗМЕНЕНО] Убрано поле "Оборудование", фильтр и отображение в отчёте.
 """
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 from datetime import datetime
 import os
 import sys
@@ -12,7 +12,7 @@ import subprocess
 import tempfile
 from config.settings import COLORS, FONTS, PADDING, SIZES
 from database.repositories import (
-    products_repo, equipment_repo, sales_repo
+    products_repo, sales_repo
 )
 from ui.widgets.date_entry import DateEntry
 from ui.widgets.combobox_autocomplete import AutocompleteCombobox
@@ -24,7 +24,7 @@ class SalesReportWindow(BaseToplevelWindow):
     def __init__(self, parent, on_exit_callback):
         all_products = products_repo.get_all()
         self.product_list = [row[0] for row in all_products]
-        self.equipment_list = [row[0] for row in equipment_repo.get_all()]
+        # [ИЗМЕНЕНО] Убран equipment_list и импорт equipment_repo
         super().__init__(parent, on_exit_callback, title="Отчет по реализации")
     
     def _build_ui(self):
@@ -40,17 +40,21 @@ class SalesReportWindow(BaseToplevelWindow):
         self.end_date_entry = DateEntry(left_inner)
         self.end_date_entry.pack(fill=tk.X, padx=10, pady=(0, 4))
         
-        self.add_field_label(left_inner, "Оборудование:")
-        self.equipment_combo = AutocompleteCombobox(left_inner, values=self.equipment_list)
-        self.equipment_combo.pack(fill=tk.X, padx=10, pady=(0, 4))
+        # [ИЗМЕНЕНО] Убрано поле "Оборудование"
         
         self.add_field_label(left_inner, "Продукция:")
-        self.product_combo = AutocompleteCombobox(left_inner, values=self.product_list)
+        self.product_combo = AutocompleteCombobox(
+            left_inner, values=self.product_list
+        )
         self.product_combo.pack(fill=tk.X, padx=10, pady=(0, 6))
         
         self.hint_label = tk.Label(
-            left_inner, text="Пустые поля - отчет по всей продукции",
-            font=FONTS['hint'], bg=COLORS['panel_bg'], fg=COLORS['work_area_text'], anchor='w'
+            left_inner,
+            text="Пустые поля - отчет по всей продукции",
+            font=FONTS['hint'],
+            bg=COLORS['panel_bg'],
+            fg=COLORS['work_area_text'],
+            anchor='w'
         )
         self.hint_label.pack(fill=tk.X, padx=10, pady=(0, 10))
         
@@ -79,25 +83,26 @@ class SalesReportWindow(BaseToplevelWindow):
         scrollbar_y = ttk.Scrollbar(tree_container, orient=tk.VERTICAL)
         scrollbar_y.pack(side=tk.RIGHT, fill=tk.Y)
         
+        # [ИЗМЕНЕНО] Убрана колонка 'equipment'
         self.tree = ttk.Treeview(
             tree_container,
-            columns=('date', 'equipment', 'product', 'color', 'quantity', 'price', 'total'),
-            show='headings', yscrollcommand=scrollbar_y.set, selectmode='browse'
+            columns=('date', 'product', 'color', 'quantity', 'price', 'total'),
+            show='headings',
+            yscrollcommand=scrollbar_y.set,
+            selectmode='browse'
         )
         self.tree.heading('date', text='Дата', anchor='w')
-        self.tree.heading('equipment', text='Оборудование', anchor='w')
         self.tree.heading('product', text='Продукция', anchor='w')
         self.tree.heading('color', text='Цвет', anchor='w')
         self.tree.heading('quantity', text='Кол-во, шт/м2', anchor='w')
         self.tree.heading('price', text='Цена, руб.', anchor='w')
         self.tree.heading('total', text='Сумма, руб.', anchor='w')
-        self.tree.column('date', width=90, anchor='w')
-        self.tree.column('equipment', width=120, anchor='w')
-        self.tree.column('product', width=200, anchor='w')
-        self.tree.column('color', width=90, anchor='w')
-        self.tree.column('quantity', width=110, anchor='w')
-        self.tree.column('price', width=110, anchor='w')
-        self.tree.column('total', width=120, anchor='w')
+        self.tree.column('date', width=100, anchor='w')
+        self.tree.column('product', width=250, anchor='w')
+        self.tree.column('color', width=100, anchor='w')
+        self.tree.column('quantity', width=120, anchor='w')
+        self.tree.column('price', width=120, anchor='w')
+        self.tree.column('total', width=130, anchor='w')
         scrollbar_y.config(command=self.tree.yview)
         self.tree.pack(fill=tk.BOTH, expand=True)
         
@@ -136,17 +141,18 @@ class SalesReportWindow(BaseToplevelWindow):
     
     def _ensure_reportlab(self):
         if not self._check_reportlab_installed():
-            result = self.ask_yes_no(
+            result = messagebox.askyesno(
                 "Необходима установка",
                 "Для формирования PDF-отчетов требуется библиотека 'reportlab'.\n\n"
-                "Установить её автоматически сейчас?\n\n(Требуется интернет-соединение)"
+                "Установить её автоматически сейчас?\n\n"
+                "(Требуется интернет-соединение)"
             )
             if result:
                 if self._install_reportlab():
-                    self.show_info("Успех", "Библиотека reportlab успешно установлена!")
+                    messagebox.showinfo("Успех", "Библиотека reportlab успешно установлена!")
                     return True
                 else:
-                    self.show_error("Ошибка установки", "Не удалось установить библиотеку.")
+                    messagebox.showerror("Ошибка установки", "Не удалось установить библиотеку.")
                     return False
             else:
                 return False
@@ -155,7 +161,8 @@ class SalesReportWindow(BaseToplevelWindow):
     def _register_cyrillic_font(self, pdfmetrics, TTFont):
         font_registered = False
         font_paths = [
-            'C:/Windows/Fonts/arial.ttf', 'C:/Windows/Fonts/Arial.ttf',
+            'C:/Windows/Fonts/arial.ttf',
+            'C:/Windows/Fonts/Arial.ttf',
             '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
             '/System/Library/Fonts/Helvetica.ttc',
         ]
@@ -174,15 +181,16 @@ class SalesReportWindow(BaseToplevelWindow):
             self.tree.delete(item)
         sales = sales_repo.get_all()
         for row in sales:
+            # [ИЗМЕНЕНО] Убрана обработка equipment
             if len(row) == 7:
                 sale_id, date, product, color, quantity, price, equipment = row
             else:
                 sale_id, date, product, color, quantity, price = row
-                equipment = ''
             total = (quantity or 0) * (price or 0)
+            # [ИЗМЕНЕНО] Убрана колонка equipment из values
             self.tree.insert(
                 '', 'end', iid=str(sale_id),
-                values=(date, equipment or '—', product, color or '—',
+                values=(date, product, color or '—',
                         self._format_number(quantity), self._format_number(price),
                         self._format_number(total))
             )
@@ -274,38 +282,38 @@ class SalesReportWindow(BaseToplevelWindow):
             from reportlab.pdfbase import pdfmetrics
             from reportlab.pdfbase.ttfonts import TTFont
         except ImportError:
-            self.show_error("Ошибка", "Не удалось загрузить библиотеку reportlab.")
+            messagebox.showerror("Ошибка", "Не удалось загрузить библиотеку reportlab.")
             return
         
         start_date = self.start_date_entry.get_date()
         end_date = self.end_date_entry.get_date()
-        equipment = self.equipment_combo.get().strip()
+        # [ИЗМЕНЕНО] Убрано получение equipment
         product = self.product_combo.get().strip()
         
         if not start_date or not end_date:
-            self.show_warning("Внимание", "Укажите даты периода")
+            messagebox.showwarning("Внимание", "Укажите даты периода")
             return
         if not self._validate_date(start_date) or not self._validate_date(end_date):
-            self.show_warning("Внимание", "Неверный формат даты")
+            messagebox.showwarning("Внимание", "Неверный формат даты")
             return
         if self._date_to_comparable(start_date) > self._date_to_comparable(end_date):
-            self.show_warning("Внимание", "Дата начала не может быть позже даты конца")
+            messagebox.showwarning("Внимание", "Дата начала не может быть позже даты конца")
             return
         
+        # [ИЗМЕНЕНО] Убран фильтр по equipment
         active_filters = []
-        if equipment:
-            active_filters.append(('Оборудование', equipment))
         if product:
             active_filters.append(('Продукция', product))
         
+        # [ИЗМЕНЕНО] Убран параметр equipment в вызове
         report_data = sales_repo.get_sales_report(
             start_date, end_date,
-            equipment=equipment if equipment else None,
+            equipment=None,
             product=product if product else None
         )
         
         if not report_data:
-            self.show_info("Информация", "Нет данных о продажах за выбранный период.")
+            messagebox.showinfo("Информация", "Нет данных о продажах за выбранный период.")
             return
         
         try:
@@ -315,7 +323,7 @@ class SalesReportWindow(BaseToplevelWindow):
             temp_file.close()
             file_path = temp_file.name
         except Exception as e:
-            self.show_error("Ошибка", f"Не удалось создать временный файл:\n\n{e}")
+            messagebox.showerror("Ошибка", f"Не удалось создать временный файл:\n\n{e}")
             return
         
         try:
@@ -366,18 +374,19 @@ class SalesReportWindow(BaseToplevelWindow):
             by_month = {}
             grand_total_amount = 0
             for row in report_data:
+                # [ИЗМЕНЕНО] Убрана обработка equipment
                 if len(row) == 7:
                     sale_id, date, prod_name, color_name, quantity, price, equip_name = row
                 else:
                     sale_id, date, prod_name, color_name, quantity, price = row
-                    equip_name = ''
                 
                 month_key = self._get_month_sort_key(date)
                 month_name = self._get_month_name(date)
                 if month_key not in by_month:
                     by_month[month_key] = {'name': month_name, 'rows': []}
+                # [ИЗМЕНЕНО] Убрано поле 'equipment'
                 by_month[month_key]['rows'].append({
-                    'date': date, 'equipment': equip_name or '',
+                    'date': date,
                     'product': prod_name or '', 'color': color_name or '',
                     'quantity': quantity or 0, 'price': price or 0,
                     'total': (quantity or 0) * (price or 0)
@@ -414,9 +423,12 @@ class SalesReportWindow(BaseToplevelWindow):
                     
                     sorted_colors = sorted(by_color.keys(), key=self._color_sort_key)
                     
+                    # [ИЗМЕНЕНО] Убрана колонка "Оборудование" из таблицы
                     table_data = [[
-                        Paragraph('Дата', cell_style), Paragraph('Цвет', cell_style),
-                        Paragraph('Кол-во', cell_style), Paragraph('Цена, руб', cell_style),
+                        Paragraph('Дата', cell_style),
+                        Paragraph('Цвет', cell_style),
+                        Paragraph('Кол-во', cell_style),
+                        Paragraph('Цена, руб', cell_style),
                         Paragraph('Сумма, руб', cell_style)
                     ]]
                     
@@ -467,6 +479,7 @@ class SalesReportWindow(BaseToplevelWindow):
                     ])
                     product_total_row_index = len(table_data) - 1
                     
+                    # [ИЗМЕНЕНО] Убрана колонка "Оборудование" — 5 колонок вместо 6
                     col_widths = [2.5*cm, 3*cm, 2.5*cm, 3*cm, 3.5*cm]
                     table = Table(table_data, colWidths=col_widths, repeatRows=1)
                     table_style = TableStyle([
@@ -524,7 +537,7 @@ class SalesReportWindow(BaseToplevelWindow):
                 elif os.name == 'posix':
                     subprocess.call(['xdg-open', file_path])
             except Exception as e:
-                self.show_warning(
+                messagebox.showwarning(
                     "Предупреждение",
                     f"PDF сформирован, но не удалось открыть автоматически:\n\n{e}\n\n"
                     f"Файл сохранен во временной папке:\n{file_path}"
@@ -535,7 +548,7 @@ class SalesReportWindow(BaseToplevelWindow):
                     os.remove(file_path)
             except:
                 pass
-            self.show_error("Ошибка", f"Не удалось сформировать PDF-отчет:\n\n{e}")
+            messagebox.showerror("Ошибка", f"Не удалось сформировать PDF-отчет:\n\n{e}")
     
     def generate_summary_report(self):
         if not self._ensure_reportlab():
@@ -549,24 +562,24 @@ class SalesReportWindow(BaseToplevelWindow):
             from reportlab.pdfbase import pdfmetrics
             from reportlab.pdfbase.ttfonts import TTFont
         except ImportError:
-            self.show_error("Ошибка", "Не удалось загрузить библиотеку reportlab.")
+            messagebox.showerror("Ошибка", "Не удалось загрузить библиотеку reportlab.")
             return
         
         start_date = self.start_date_entry.get_date()
         end_date = self.end_date_entry.get_date()
         if not start_date or not end_date:
-            self.show_warning("Внимание", "Укажите даты периода")
+            messagebox.showwarning("Внимание", "Укажите даты периода")
             return
         if not self._validate_date(start_date) or not self._validate_date(end_date):
-            self.show_warning("Внимание", "Неверный формат даты")
+            messagebox.showwarning("Внимание", "Неверный формат даты")
             return
         if self._date_to_comparable(start_date) > self._date_to_comparable(end_date):
-            self.show_warning("Внимание", "Дата начала не может быть позже даты конца")
+            messagebox.showwarning("Внимание", "Дата начала не может быть позже даты конца")
             return
         
         report_data = sales_repo.get_sales_report(start_date, end_date)
         if not report_data:
-            self.show_info("Информация", "Нет данных о продажах за выбранный период.")
+            messagebox.showinfo("Информация", "Нет данных о продажах за выбранный период.")
             return
         
         try:
@@ -576,7 +589,7 @@ class SalesReportWindow(BaseToplevelWindow):
             temp_file.close()
             file_path = temp_file.name
         except Exception as e:
-            self.show_error("Ошибка", f"Не удалось создать временный файл:\n\n{e}")
+            messagebox.showerror("Ошибка", f"Не удалось создать временный файл:\n\n{e}")
             return
         
         try:
@@ -602,6 +615,7 @@ class SalesReportWindow(BaseToplevelWindow):
             by_product = {}
             grand_total_amount = 0
             for row in report_data:
+                # [ИЗМЕНЕНО] Убрана обработка equipment
                 if len(row) == 7:
                     sale_id, date, prod_name, color_name, quantity, price, equip_name = row
                 else:
@@ -672,7 +686,7 @@ class SalesReportWindow(BaseToplevelWindow):
                 elif os.name == 'posix':
                     subprocess.call(['xdg-open', file_path])
             except Exception as e:
-                self.show_warning(
+                messagebox.showwarning(
                     "Предупреждение",
                     f"PDF сформирован, но не удалось открыть автоматически:\n\n{e}\n\n"
                     f"Файл сохранен во временной папке:\n{file_path}"
@@ -683,7 +697,7 @@ class SalesReportWindow(BaseToplevelWindow):
                     os.remove(file_path)
             except:
                 pass
-            self.show_error("Ошибка", f"Не удалось сформировать сводный отчет:\n\n{e}")
+            messagebox.showerror("Ошибка", f"Не удалось сформировать сводный отчет:\n\n{e}")
     
     def generate_color_summary_report(self):
         if not self._ensure_reportlab():
@@ -697,24 +711,24 @@ class SalesReportWindow(BaseToplevelWindow):
             from reportlab.pdfbase import pdfmetrics
             from reportlab.pdfbase.ttfonts import TTFont
         except ImportError:
-            self.show_error("Ошибка", "Не удалось загрузить библиотеку reportlab.")
+            messagebox.showerror("Ошибка", "Не удалось загрузить библиотеку reportlab.")
             return
         
         start_date = self.start_date_entry.get_date()
         end_date = self.end_date_entry.get_date()
         if not start_date or not end_date:
-            self.show_warning("Внимание", "Укажите даты периода")
+            messagebox.showwarning("Внимание", "Укажите даты периода")
             return
         if not self._validate_date(start_date) or not self._validate_date(end_date):
-            self.show_warning("Внимание", "Неверный формат даты")
+            messagebox.showwarning("Внимание", "Неверный формат даты")
             return
         if self._date_to_comparable(start_date) > self._date_to_comparable(end_date):
-            self.show_warning("Внимание", "Дата начала не может быть позже даты конца")
+            messagebox.showwarning("Внимание", "Дата начала не может быть позже даты конца")
             return
         
         report_data = sales_repo.get_sales_report(start_date, end_date)
         if not report_data:
-            self.show_info("Информация", "Нет данных о продажах за выбранный период.")
+            messagebox.showinfo("Информация", "Нет данных о продажах за выбранный период.")
             return
         
         try:
@@ -724,7 +738,7 @@ class SalesReportWindow(BaseToplevelWindow):
             temp_file.close()
             file_path = temp_file.name
         except Exception as e:
-            self.show_error("Ошибка", f"Не удалось создать временный файл:\n\n{e}")
+            messagebox.showerror("Ошибка", f"Не удалось создать временный файл:\n\n{e}")
             return
         
         try:
@@ -750,6 +764,7 @@ class SalesReportWindow(BaseToplevelWindow):
             by_product_color = {}
             grand_total_amount = 0
             for row in report_data:
+                # [ИЗМЕНЕНО] Убрана обработка equipment
                 if len(row) == 7:
                     sale_id, date, prod_name, color_name, quantity, price, equip_name = row
                 else:
@@ -789,7 +804,8 @@ class SalesReportWindow(BaseToplevelWindow):
             
             table_data.append([
                 Paragraph('<b>ИТОГО</b>', cell_style),
-                Paragraph('', cell_style), Paragraph('', cell_style),
+                Paragraph('', cell_style),
+                Paragraph('', cell_style),
                 Paragraph(f'<b>{self._format_number(grand_total_amount)}</b>', cell_style)
             ])
             
@@ -832,7 +848,7 @@ class SalesReportWindow(BaseToplevelWindow):
                 elif os.name == 'posix':
                     subprocess.call(['xdg-open', file_path])
             except Exception as e:
-                self.show_warning(
+                messagebox.showwarning(
                     "Предупреждение",
                     f"PDF сформирован, но не удалось открыть автоматически:\n\n{e}\n\n"
                     f"Файл сохранен во временной папке:\n{file_path}"
@@ -843,4 +859,4 @@ class SalesReportWindow(BaseToplevelWindow):
                     os.remove(file_path)
             except:
                 pass
-            self.show_error("Ошибка", f"Не удалось сформировать сводный отчет (цвет):\n\n{e}")
+            messagebox.showerror("Ошибка", f"Не удалось сформировать сводный отчет (цвет):\n\n{e}")

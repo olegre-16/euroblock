@@ -246,12 +246,9 @@ class CementReceiptsRepository:
     def __init__(self):
         self.table_name = 'cement_receipts'
     
-    # [ИЗМЕНЕНО] Сортировка через substr() для корректной работы с датами ДД.ММ.ГГГГ
+    # [ИЗМЕНЕНО] Корректная сортировка дат через substr()
     def get_all_receipts(self):
-        """
-        Получить все поступления, отсортированные по дате (убывание).
-        [ИЗМЕНЕНО] Используется substr() для корректной сортировки дат в формате ДД.ММ.ГГГГ.
-        """
+        """Получить все поступления, отсортированные по дате (убывание)"""
         conn = get_connection()
         cursor = conn.cursor()
         cursor.execute(f'''
@@ -267,8 +264,9 @@ class CementReceiptsRepository:
         conn.close()
         return result
     
+    # [НОВОЕ] Алиас для совместимости с другими окнами
     def get_all(self):
-        """Алиас для совместимости с другими окнами"""
+        """Алиас для get_all_receipts"""
         return self.get_all_receipts()
     
     def add_receipt(self, receipt_date, silo_name, quantity_kg, supplier_name=None, is_correction=False):
@@ -295,8 +293,9 @@ class CementReceiptsRepository:
         finally:
             conn.close()
     
+    # [НОВОЕ] Алиас для совместимости
     def add(self, *args, **kwargs):
-        """Алиас для совместимости с другими окнами"""
+        """Алиас для add_receipt"""
         return self.add_receipt(*args, **kwargs)
     
     def update_receipt(self, receipt_id, receipt_date, silo_name, quantity_kg, 
@@ -326,10 +325,12 @@ class CementReceiptsRepository:
         finally:
             conn.close()
     
+    # [НОВОЕ] Алиас для совместимости
     def update(self, *args, **kwargs):
-        """Алиас для совместимости"""
+        """Алиас для update_receipt"""
         return self.update_receipt(*args, **kwargs)
     
+    # [ИЗМЕНЕНО] Теперь возвращает (True, "Запись удалена") или (False, "Ошибка...")
     def delete_receipt(self, receipt_id):
         """Удалить запись о поступлении"""
         conn = get_connection()
@@ -348,8 +349,9 @@ class CementReceiptsRepository:
         finally:
             conn.close()
     
+    # [НОВОЕ] Алиас для совместимости
     def delete(self, *args, **kwargs):
-        """Алиас для совместимости с другими окнами"""
+        """Алиас для delete_receipt"""
         return self.delete_receipt(*args, **kwargs)
     
     def get_receipt_by_id(self, receipt_id):
@@ -364,8 +366,9 @@ class CementReceiptsRepository:
         conn.close()
         return result
     
+    # [НОВОЕ] Алиас для совместимости
     def get_by_id(self, receipt_id):
-        """Алиас для совместимости с другими окнами"""
+        """Алиас для get_receipt_by_id"""
         return self.get_receipt_by_id(receipt_id)
     
     def get_current_balance_by_silo(self):
@@ -395,6 +398,7 @@ class CementReceiptsRepository:
         conn.close()
         return balance
     
+    # ... остальные методы (get_cement_report, get_cement_monthly_report) оставляем БЕЗ ИЗМЕНЕНИЙ ...
     def get_cement_report(self):
         """Получить полный отчет по движению цемента."""
         conn = get_connection()
@@ -1242,144 +1246,55 @@ class WarehouseRepository:
 # РЕЗЕРВ ПРОДУКЦИИ
 # ============================================================================
 class ReservedProductsRepository:
+    """Репозиторий для работы с продукцией в резерве"""
     def __init__(self):
         self.table_name = 'reserved_products'
         self.sold_table_name = 'sold_from_reserve'
     
     def get_all_reserved(self):
+        """Получить все записи о резервах"""
         conn = get_connection()
-        try:
-            cursor = conn.cursor()
-            cursor.execute(f'''
-                SELECT id, start_date, end_date, product_name, color_name, quantity, customer_name
-                FROM {self.table_name}
-                ORDER BY 
-                    substr(start_date, 7, 4) || '-' || 
-                    substr(start_date, 4, 2) || '-' || 
-                    substr(start_date, 1, 2) DESC,
-                    id DESC
-            ''')
-            return cursor.fetchall()
-        finally:
-            return_connection(conn)
+        cursor = conn.cursor()
+        cursor.execute(f'''
+            SELECT id, start_date, end_date, product_name, color_name, quantity, customer_name
+            FROM {self.table_name}
+            ORDER BY 
+                substr(start_date, 7, 4) || '-' || 
+                substr(start_date, 4, 2) || '-' || 
+                substr(start_date, 1, 2) DESC,
+                id DESC
+        ''')
+        result = cursor.fetchall()
+        conn.close()
+        return result
     
-    # [НОВОЕ] Пагинация
-    def get_all_reserved_paged(self, page=0, page_size=100):
-        conn = get_connection()
-        try:
-            cursor = conn.cursor()
-            cursor.execute(f'SELECT COUNT(*) FROM {self.table_name}')
-            total = cursor.fetchone()[0]
-            offset = page * page_size
-            cursor.execute(f'''
-                SELECT id, start_date, end_date, product_name, color_name, quantity, customer_name
-                FROM {self.table_name}
-                ORDER BY 
-                    substr(start_date, 7, 4) || '-' || 
-                    substr(start_date, 4, 2) || '-' || 
-                    substr(start_date, 1, 2) DESC,
-                    id DESC
-                LIMIT ? OFFSET ?
-            ''', (page_size, offset))
-            return cursor.fetchall(), total
-        finally:
-            return_connection(conn)
-    
-    def get_by_id(self, reserve_id):
-        conn = get_connection()
-        try:
-            cursor = conn.cursor()
-            cursor.execute(f'''
-                SELECT id, start_date, end_date, product_name, color_name, quantity, customer_name
-                FROM {self.table_name} WHERE id = ?
-            ''', (reserve_id,))
-            return cursor.fetchone()
-        finally:
-            return_connection(conn)
-    
-    def add(self, start_date, end_date, product_name, color_name, quantity, customer_name):
-        return self.add_reserved(start_date, end_date, product_name, color_name, quantity, customer_name)
-    
-    def add_reserved(self, start_date, end_date, product_name, color_name, quantity, customer_name):
-        if not start_date:
-            return False, "Дата начала резерва не указана"
-        if not end_date:
-            return False, "Дата конца резерва не указана"
-        if not product_name:
-            return False, "Продукция не выбрана"
-        if quantity is None:
-            return False, "Количество не указано"
-        conn = get_connection()
-        try:
-            cursor = conn.cursor()
-            cursor.execute(f'''
-                INSERT INTO {self.table_name} 
-                (start_date, end_date, product_name, color_name, quantity, customer_name)
-                VALUES (?, ?, ?, ?, ?, ?)
-            ''', (start_date, end_date, product_name, color_name, quantity, customer_name))
-            conn.commit()
-            _invalidate_table_cache(self.table_name)
-            return True, "Резерв добавлен"
-        except Exception as e:
-            return False, f"Ошибка добавления: {e}"
-        finally:
-            return_connection(conn)
-    
-    def update(self, reserve_id, start_date, end_date, product_name, color_name, quantity, customer_name):
-        conn = get_connection()
-        try:
-            cursor = conn.cursor()
-            cursor.execute(f'''
-                UPDATE {self.table_name}
-                SET start_date = ?, end_date = ?, product_name = ?,
-                    color_name = ?, quantity = ?, customer_name = ?
-                WHERE id = ?
-            ''', (start_date, end_date, product_name, color_name, quantity, customer_name, reserve_id))
-            conn.commit()
-            _invalidate_table_cache(self.table_name)
-            return True, "Резерв обновлён"
-        except Exception as e:
-            return False, f"Ошибка обновления: {e}"
-        finally:
-            return_connection(conn)
-    
-    def delete(self, reserve_id):
-        conn = get_connection()
-        try:
-            cursor = conn.cursor()
-            cursor.execute(f'DELETE FROM {self.table_name} WHERE id = ?', (reserve_id,))
-            conn.commit()
-            _invalidate_table_cache(self.table_name)
-            return True, "Резерв удалён"
-        except Exception as e:
-            return False, f"Ошибка удаления: {e}"
-        finally:
-            return_connection(conn)
-    
-    def delete_reserved(self, reserve_id):
-        return self.delete(reserve_id)
+    # [НОВОЕ] Алиас для совместимости с другими окнами
+    def get_all(self):
+        """Алиас для get_all_reserved"""
+        return self.get_all_reserved()
     
     def get_all_sold(self):
+        """Получить все записи о реализованной продукции"""
         conn = get_connection()
-        try:
-            cursor = conn.cursor()
-            cursor.execute(f'''
-                SELECT id, start_date, end_date, sale_date, product_name, color_name, quantity, customer_name
-                FROM {self.sold_table_name}
-                ORDER BY 
-                    substr(sale_date, 7, 4) || '-' || 
-                    substr(sale_date, 4, 2) || '-' || 
-                    substr(sale_date, 1, 2) DESC,
-                    id DESC
-            ''')
-            return cursor.fetchall()
-        finally:
-            return_connection(conn)
+        cursor = conn.cursor()
+        cursor.execute(f'''
+            SELECT id, start_date, end_date, sale_date, product_name, color_name, quantity, customer_name
+            FROM {self.sold_table_name}
+            ORDER BY 
+                substr(sale_date, 7, 4) || '-' || 
+                substr(sale_date, 4, 2) || '-' || 
+                substr(sale_date, 1, 2) DESC,
+                id DESC
+        ''')
+        result = cursor.fetchall()
+        conn.close()
+        return result
     
     def get_sold_sum(self):
+        """Получить сумму всех проданных товаров"""
         conn = get_connection()
+        cursor = conn.cursor()
         try:
-            cursor = conn.cursor()
             cursor.execute(f'''
                 SELECT product_name, color_name, SUM(quantity) as total
                 FROM {self.sold_table_name}
@@ -1391,17 +1306,124 @@ class ReservedProductsRepository:
                 key = (product.strip() if product else '', color.strip() if color else '')
                 result[key] = qty or 0
             return result
-        except Exception:
+        except Exception as e:
             return {}
         finally:
-            return_connection(conn)
+            conn.close()
+    
+    def get_reserved_by_id(self, reserve_id):
+        """Получить запись о резерве по ID"""
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(f'''
+            SELECT id, start_date, end_date, product_name, color_name, quantity, customer_name
+            FROM {self.table_name} WHERE id = ?
+        ''', (reserve_id,))
+        result = cursor.fetchone()
+        conn.close()
+        return result
+    
+    # [НОВОЕ] Алиас для совместимости
+    def get_by_id(self, reserve_id):
+        """Алиас для get_reserved_by_id"""
+        return self.get_reserved_by_id(reserve_id)
+    
+    def add_reserved(self, start_date, end_date, product_name, color_name, quantity, customer_name):
+        """Добавить запись о резерве"""
+        if not start_date:
+            return False, "Дата начала резерва не указана"
+        if not end_date:
+            return False, "Дата конца резерва не указана"
+        if not product_name:
+            return False, "Продукция не выбрана"
+        if quantity is None:
+            return False, "Количество не указано"
+        conn = get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(f'''
+                INSERT INTO {self.table_name} 
+                (start_date, end_date, product_name, color_name, quantity, customer_name)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (start_date, end_date, product_name, color_name, quantity, customer_name))
+            conn.commit()
+            return True, "Резерв добавлен"
+        except Exception as e:
+            return False, f"Ошибка добавления: {e}"
+        finally:
+            conn.close()
+    
+    # [НОВОЕ] Алиас для совместимости
+    def add(self, *args, **kwargs):
+        """Алиас для add_reserved"""
+        return self.add_reserved(*args, **kwargs)
+    
+    # [НОВОЕ] Метод update для резервов (ранее отсутствовал!)
+    def update(self, reserve_id, start_date, end_date, product_name, color_name, quantity, customer_name):
+        """Обновить запись о резерве"""
+        if not start_date:
+            return False, "Дата начала резерва не указана"
+        if not end_date:
+            return False, "Дата конца резерва не указана"
+        if not product_name:
+            return False, "Продукция не выбрана"
+        if quantity is None:
+            return False, "Количество не указано"
+        conn = get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(f'''
+                UPDATE {self.table_name}
+                SET start_date = ?, end_date = ?, product_name = ?,
+                    color_name = ?, quantity = ?, customer_name = ?
+                WHERE id = ?
+            ''', (start_date, end_date, product_name, color_name, quantity, customer_name, reserve_id))
+            conn.commit()
+            return True, "Резерв обновлён"
+        except Exception as e:
+            conn.rollback()
+            return False, f"Ошибка обновления: {e}"
+        finally:
+            conn.close()
+    
+    def delete_reserved(self, reserve_id):
+        """Удалить запись о резерве"""
+        conn = get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(f'SELECT COUNT(*) FROM {self.table_name} WHERE id = ?', (reserve_id,))
+            count = cursor.fetchone()[0]
+            if count == 0:
+                return False, "Запись не найдена"
+            cursor.execute(f'DELETE FROM {self.table_name} WHERE id = ?', (reserve_id,))
+            conn.commit()
+            return True, "Запись удалена"
+        except Exception as e:
+            conn.rollback()
+            return False, f"Ошибка удаления: {e}"
+        finally:
+            conn.close()
+    
+    # [НОВОЕ] Алиас для совместимости
+    def delete(self, *args, **kwargs):
+        """Алиас для delete_reserved"""
+        return self.delete_reserved(*args, **kwargs)
+    
+    def delete_sold(self, sold_id):
+        """Удалить запись о реализованной продукции"""
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(f'DELETE FROM {self.sold_table_name} WHERE id = ?', (sold_id,))
+        conn.commit()
+        conn.close()
     
     def move_to_sold(self, reserve_id, sale_date):
+        """Переместить запись из резерва в реализованную продукцию."""
         if not sale_date:
             return False, "Дата продажи не указана"
         conn = get_connection()
+        cursor = conn.cursor()
         try:
-            cursor = conn.cursor()
             cursor.execute(f'''
                 SELECT start_date, end_date, product_name, color_name, quantity, customer_name
                 FROM {self.table_name} WHERE id = ?
@@ -1417,15 +1439,12 @@ class ReservedProductsRepository:
             ''', (start_date, end_date, sale_date, product_name, color_name, quantity, customer_name))
             cursor.execute(f'DELETE FROM {self.table_name} WHERE id = ?', (reserve_id,))
             conn.commit()
-            _invalidate_table_cache(self.table_name)
-            _invalidate_table_cache(self.sold_table_name)
             return True, "Продукция реализована"
         except Exception as e:
             conn.rollback()
             return False, f"Ошибка реализации: {e}"
         finally:
-            return_connection(conn)
-
+            conn.close()
 
 # ============================================================================
 # КОРРЕКТИРОВКИ
