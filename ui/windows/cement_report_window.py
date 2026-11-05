@@ -2,10 +2,20 @@
 Окно "Отчет по цементу" - отчет о движении цемента по силосам
 Оформление идентично окну "Производство продукции".
 [ИЗМЕНЕНО]
-- Таблицы создаются для ВСЕХ силосов из справочника (даже без данных)
-- Используется grid() для гарантированного равномерного распределения
-- Внутри каждого блока тоже grid() для надёжного растягивания
-- PDF-отчёт всегда формируется в книжной ориентации (A4 portrait)
+- Добавлена колонка "Коррекция" в табличную часть
+- Остаток корректно рассчитывается с учётом корректировок
+- Защита от ошибки распаковки кортежей (поддержка 5 и 6 значений)
+- Таблицы создаются для ВСЕХ силосов (даже без данных)
+- Используется grid() для равномерного распределения таблиц
+- PDF-отчёт в книжной ориентации (A4 portrait)
+- В отчёте по конкретному силосу:
+  * Даты идут по возрастанию
+  * Перед каждой корректировкой — итоги поступлений и расхода
+  * После корректировки — накопление начинается заново
+  * В конце — общий итог за период (приход, расход, корректировка)
+- В отчёте по всем силосам:
+  * Добавлена колонка "Расход цемента, кг"
+  * 4 колонки: Силос | Поступление | Расход | Корректировка
 """
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -104,7 +114,7 @@ class CementReportWindow(BaseToplevelWindow):
             fg=COLORS['title_text']
         ).pack(pady=(10, 5), anchor='w', padx=10)
         
-        # [ИЗМЕНЕНО] Контейнер для таблиц — равномерно растягивается
+        # Контейнер для таблиц
         self.tables_container = tk.Frame(right_frame, bg=COLORS['panel_bg'])
         self.tables_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
         
@@ -122,11 +132,39 @@ class CementReportWindow(BaseToplevelWindow):
         except (ValueError, TypeError):
             return str(value)
     
+    # ========================================================================
+    # [НОВОЕ] Безопасная распаковка строки отчёта по цементу
+    # Поддерживает старый формат (5 значений) и новый (6 значений)
+    # ========================================================================
+    def _unpack_cement_report_row(self, row):
+        """
+        Приводит строку отчёта по цементу к единому виду:
+        (date, silo, receipt, consumption, correction, balance)
+        
+        Поддерживает:
+        - старый формат из 5 колонок (без correction):
+          (date, silo, receipt, consumption, balance)
+        - новый формат из 6 колонок:
+          (date, silo, receipt, consumption, correction, balance)
+        """
+        if len(row) == 6:
+            return row
+        
+        if len(row) == 5:
+            date, silo, receipt, consumption, balance = row
+            return date, silo, receipt, consumption, 0, balance
+        
+        raise ValueError(f"Неожиданный формат строки отчёта по цементу: {row}")
+    
+    # ========================================================================
+    # [ИЗМЕНЕНО] Загрузка данных с равномерным распределением через grid
+    # ========================================================================
     def load_report_data(self):
         """
         Загрузить данные отчета.
-        [ИЗМЕНЕНО] Создаются таблицы для ВСЕХ силосов (даже без данных).
-        Таблицы равномерно делят пространство по вертикали через grid().
+        - Создаются таблицы для ВСЕХ силосов (даже без данных)
+        - Таблицы равномерно делят пространство по вертикали через grid()
+        - Защита от ошибки распаковки кортежей
         """
         # Очищаем контейнер
         for widget in self.tables_container.winfo_children():
@@ -136,10 +174,9 @@ class CementReportWindow(BaseToplevelWindow):
         report_data = cement_receipts_repo.get_cement_report()
         
         # Получаем список ВСЕХ силосов из справочника
-        all_silos = cement_silos_repo.get_all()  # [(name, capacity), ...]
+        all_silos = cement_silos_repo.get_all()
         
         if not all_silos:
-            # Если силосов нет вообще
             no_data_label = tk.Label(
                 self.tables_container,
                 text="Силоса не настроены. Добавьте их в Настройках.",
@@ -150,56 +187,51 @@ class CementReportWindow(BaseToplevelWindow):
             no_data_label.pack(expand=True)
             return
         
-        # Группируем данные по силосам
+        # Группируем данные по силосам (с безопасной распаковкой)
         data_by_silo = {}
         if report_data:
             for row in report_data:
-                date, silo, receipt, consumption, balance = row
+                date, silo, receipt, consumption, correction, balance = self._unpack_cement_report_row(row)
                 if silo not in data_by_silo:
                     data_by_silo[silo] = []
-                data_by_silo[silo].append(row)
+                data_by_silo[silo].append((date, silo, receipt, consumption, correction, balance))
         
-        # [НОВОЕ] Настраиваем grid-контейнер для равномерного распределения
-        # Одна колонка на всю ширину
+        # Настраиваем grid-контейнер для равномерного распределения
         self.tables_container.grid_columnconfigure(0, weight=1)
+        
+        # На случай перезагрузки очищаем веса старых строк
+        for i in range(50):
+            self.tables_container.grid_rowconfigure(i, weight=0)
         
         # Создаем таблицу для КАЖДОГО силоса (даже если данных нет)
         for row_idx, (silo_name, capacity) in enumerate(all_silos):
-            # [НОВОЕ] Настраиваем строку grid — weight=1 означает равномерное распределение
             self.tables_container.grid_rowconfigure(row_idx, weight=1)
             
             silo_data = data_by_silo.get(silo_name, [])
             self._create_silo_table(row_idx, silo_name, silo_data)
     
+    # ========================================================================
+    # [ИЗМЕНЕНО] Создание таблицы с колонкой "Коррекция"
+    # ========================================================================
     def _create_silo_table(self, row_idx, silo_name, silo_data):
         """
         Создать таблицу отчета для одного силоса.
-        [ИЗМЕНЕНО] Используется grid() с sticky='nsew' для растягивания на всё пространство.
-        
-        Args:
-            row_idx: индекс строки в grid
-            silo_name: название силоса
-            silo_data: список данных для этого силоса
+        Колонки: Дата | Поступление | Расход | Коррекция | Остаток
         """
-        # [ИЗМЕНЕНО] Блок силоса размещается через grid с растягиванием
         silo_block = tk.Frame(
             self.tables_container,
             bg=COLORS['panel_bg'],
             relief=tk.RAISED,
             bd=1
         )
-        # [НОВОЕ] grid вместо pack — sticky='nsew' растягивает блок на всю ячейку
         silo_block.grid(
             row=row_idx, column=0,
-            sticky='nsew',  # North, South, East, West — растягивание во все стороны
+            sticky='nsew',
             padx=0, pady=1
         )
         
-        # [НОВОЕ] Настраиваем внутренний grid блока силоса
-        # Строка 0 — заголовок (фиксированная высота)
-        # Строка 1 — таблица (растягивается)
-        silo_block.grid_rowconfigure(0, weight=0)   # Заголовок — не растягивается
-        silo_block.grid_rowconfigure(1, weight=1)   # Таблица — растягивается
+        silo_block.grid_rowconfigure(0, weight=0)
+        silo_block.grid_rowconfigure(1, weight=1)
         silo_block.grid_columnconfigure(0, weight=1)
         
         # Заголовок блока силоса
@@ -215,25 +247,24 @@ class CementReportWindow(BaseToplevelWindow):
             anchor='w'
         ).pack(fill=tk.X, padx=5, pady=3)
         
-        # [НОВОЕ] Контейнер для Treeview — использует grid внутри блока
+        # Контейнер для Treeview
         tree_container = tk.Frame(silo_block, bg=COLORS['panel_bg'])
         tree_container.grid(row=1, column=0, sticky='nsew')
         
-        # Настраиваем внутренний grid контейнера
         tree_container.grid_rowconfigure(0, weight=1)
         tree_container.grid_columnconfigure(0, weight=1)
         
         scrollbar_y = ttk.Scrollbar(tree_container, orient=tk.VERTICAL)
         scrollbar_y.grid(row=0, column=1, sticky='ns')
         
+        # [ИЗМЕНЕНО] Добавлена колонка 'correction'
         tree = ttk.Treeview(
             tree_container,
-            columns=('date', 'receipt', 'consumption', 'balance'),
+            columns=('date', 'receipt', 'consumption', 'correction', 'balance'),
             show='headings',
             selectmode='browse'
         )
         
-        # [НОВОЕ] Treeview размещается через grid с привязкой к скроллбару
         tree.grid(row=0, column=0, sticky='nsew')
         tree.configure(yscrollcommand=scrollbar_y.set)
         scrollbar_y.configure(command=tree.yview)
@@ -241,29 +272,32 @@ class CementReportWindow(BaseToplevelWindow):
         tree.heading('date', text='Дата', anchor='w')
         tree.heading('receipt', text='Поступление', anchor='w')
         tree.heading('consumption', text='Расход', anchor='w')
+        tree.heading('correction', text='Коррекция', anchor='w')
         tree.heading('balance', text='Остаток', anchor='w')
         
-        tree.column('date', width=100, anchor='w')
-        tree.column('receipt', width=120, anchor='w')
-        tree.column('consumption', width=120, anchor='w')
-        tree.column('balance', width=120, anchor='w')
+        tree.column('date', width=90, anchor='w')
+        tree.column('receipt', width=110, anchor='w')
+        tree.column('consumption', width=110, anchor='w')
+        tree.column('correction', width=110, anchor='w')
+        tree.column('balance', width=110, anchor='w')
         
         # Заполняем данными
         if silo_data:
             for row in silo_data:
-                date, silo, receipt, consumption, balance = row
+                date, silo, receipt, consumption, correction, balance = self._unpack_cement_report_row(row)
                 receipt_str = self._format_number(receipt) if receipt and receipt > 0 else ''
                 consumption_str = self._format_number(consumption) if consumption and consumption > 0 else ''
+                # [НОВОЕ] Коррекция может быть как положительной, так и отрицательной
+                correction_str = self._format_number(correction) if correction and correction != 0 else ''
                 balance_str = self._format_number(balance)
                 tree.insert(
                     '', 'end',
-                    values=(date, receipt_str, consumption_str, balance_str)
+                    values=(date, receipt_str, consumption_str, correction_str, balance_str)
                 )
         else:
-            # Если данных нет — показываем сообщение в таблице
             tree.insert(
                 '', 'end',
-                values=('—', 'Нет данных', 'Нет данных', '—')
+                values=('—', 'Нет данных', 'Нет данных', 'Нет данных', '—')
             )
     
     # ========================================================================
@@ -358,7 +392,6 @@ class CementReportWindow(BaseToplevelWindow):
         end_date = self.end_date_entry.get_date()
         silo_name = self.silo_combo.get().strip()
         
-        # Валидация
         if not start_date or not end_date:
             messagebox.showwarning("Внимание", "Укажите даты периода")
             return
@@ -369,7 +402,6 @@ class CementReportWindow(BaseToplevelWindow):
             messagebox.showwarning("Внимание", "Дата начала не может быть позже даты конца")
             return
         
-        # Создаём временный файл
         try:
             temp_file = tempfile.NamedTemporaryFile(
                 delete=False, suffix='.pdf', prefix='Otchet_po_cementu_'
@@ -391,7 +423,6 @@ class CementReportWindow(BaseToplevelWindow):
             
             elements = []
             
-            # Стили
             title_style = ParagraphStyle(
                 'Title', fontName=font_name, fontSize=14,
                 alignment=1, spaceAfter=5, leading=16
@@ -404,11 +435,9 @@ class CementReportWindow(BaseToplevelWindow):
                 'Cell', fontName=font_name, fontSize=8, leading=9
             )
             
-            # Заголовок
             title_text = f"Отчет по цементу с {start_date} по {end_date}"
             elements.append(Paragraph(title_text, title_style))
             
-            # Подзаголовок
             if silo_name:
                 subtitle_text = f"Силос: {silo_name}"
             else:
@@ -416,7 +445,6 @@ class CementReportWindow(BaseToplevelWindow):
             elements.append(Paragraph(subtitle_text, subtitle_style))
             elements.append(Spacer(1, 0.3*cm))
             
-            # Генерируем отчёт в зависимости от режима
             if silo_name:
                 elements.extend(self._build_silo_report(
                     silo_name, start_date, end_date, cell_style, font_name
@@ -428,7 +456,6 @@ class CementReportWindow(BaseToplevelWindow):
             
             doc.build(elements)
             
-            # Открываем PDF
             try:
                 if os.name == 'nt':
                     os.startfile(file_path)
@@ -458,7 +485,6 @@ class CementReportWindow(BaseToplevelWindow):
         from reportlab.platypus import Table, TableStyle, Paragraph, Spacer
         from reportlab.lib.styles import ParagraphStyle
         
-        # Получаем данные (с расходом)
         report_data = cement_receipts_repo.get_monthly_report_with_corrections(
             start_date, end_date
         )
@@ -468,14 +494,12 @@ class CementReportWindow(BaseToplevelWindow):
         
         elements = []
         
-        # Группируем по месяцам
         by_month = {}
         for sort_key, month_str, silo, receipt, consumption, correction in report_data:
             if month_str not in by_month:
                 by_month[month_str] = []
             by_month[month_str].append((sort_key, silo, receipt, consumption, correction))
         
-        # Сортируем месяцы по убыванию
         month_order = {
             'Январь': '01', 'Февраль': '02', 'Март': '03', 'Апрель': '04',
             'Май': '05', 'Июнь': '06', 'Июль': '07', 'Август': '08',
@@ -500,7 +524,6 @@ class CementReportWindow(BaseToplevelWindow):
             )
             elements.append(Paragraph(f"<b>{month_str}</b>", month_title_style))
             
-            # Таблица с 4 колонками
             table_data = [[
                 Paragraph('Силос', cell_style),
                 Paragraph('Поступление<br/>цемента, кг', cell_style),
@@ -567,8 +590,11 @@ class CementReportWindow(BaseToplevelWindow):
     def _build_silo_report(self, silo_name, start_date, end_date, cell_style, font_name):
         """
         Построить отчёт по конкретному силосу по датам.
-        Добавлена колонка "Расход цемента, кг".
-        Итоги поступлений и расхода выводятся ПЕРЕД КАЖДОЙ корректировкой.
+        [ИЗМЕНЕНО]
+        - Даты идут по возрастанию (хронологически)
+        - Итоги поступлений и расхода выводятся ПЕРЕД КАЖДОЙ корректировкой
+        - После корректировки накопление начинается заново
+        - В конце отчёта — общий итог за период: приход, расход, корректировка
         """
         from reportlab.lib import colors
         from reportlab.lib.units import cm
@@ -597,12 +623,21 @@ class CementReportWindow(BaseToplevelWindow):
             Paragraph('Корректировка,<br/>кг', cell_style)
         ]]
         
+        # Накопительные суммы для промежуточных итогов (перед корректировками)
         accumulated_receipt = 0
         accumulated_consumption = 0
         has_accumulated = False
         
+        # [НОВОЕ] Общие итоги за весь период
+        total_receipt = 0
+        total_consumption = 0
+        total_correction = 0
+        
+        # Обрабатываем все операции в хронологическом порядке
         for date, receipt_qty, consumption_qty, is_correction in daily_data:
             if is_correction == 1:
+                # === КОРРЕКТИРОВКА ===
+                # Сначала выводим промежуточный итог (если есть накопленные данные)
                 if has_accumulated and (accumulated_receipt > 0 or accumulated_consumption > 0):
                     table_data.append([
                         Paragraph('<b>Итого до корректировки:</b>', cell_style),
@@ -611,35 +646,56 @@ class CementReportWindow(BaseToplevelWindow):
                         Paragraph('', cell_style)
                     ])
                 
+                # Сбрасываем накопленные суммы для следующего блока
                 accumulated_receipt = 0
                 accumulated_consumption = 0
                 has_accumulated = False
                 
+                # Выводим строку корректировки
                 table_data.append([
                     Paragraph(date, cell_style),
                     Paragraph('', cell_style),
                     Paragraph('', cell_style),
                     Paragraph(self._format_number(receipt_qty), cell_style)
                 ])
+                
+                # Накапливаем общую корректировку
+                total_correction += receipt_qty
             else:
+                # === ОБЫЧНАЯ ОПЕРАЦИЯ (поступление/расход) ===
                 table_data.append([
                     Paragraph(date, cell_style),
                     Paragraph(self._format_number(receipt_qty) if receipt_qty > 0 else '', cell_style),
                     Paragraph(self._format_number(consumption_qty) if consumption_qty > 0 else '', cell_style),
                     Paragraph('', cell_style)
                 ])
+                # Накапливаем суммы для промежуточных итогов
                 accumulated_receipt += receipt_qty
                 accumulated_consumption += consumption_qty
                 has_accumulated = True
+                
+                # Накапливаем общие итоги за период
+                total_receipt += receipt_qty
+                total_consumption += consumption_qty
         
+        # Финальный промежуточный итог (если после последней корректировки есть данные)
         if has_accumulated and (accumulated_receipt > 0 or accumulated_consumption > 0):
             table_data.append([
-                Paragraph('<b>Итого:</b>', cell_style),
+                Paragraph('<b>Итого до конца периода:</b>', cell_style),
                 Paragraph(f'<b>{self._format_number(accumulated_receipt)}</b>', cell_style),
                 Paragraph(f'<b>{self._format_number(accumulated_consumption)}</b>', cell_style),
                 Paragraph('', cell_style)
             ])
         
+        # [НОВОЕ] Общий итог за весь период: приход, расход, корректировка
+        table_data.append([
+            Paragraph('<b>ИТОГО ЗА ПЕРИОД:</b>', cell_style),
+            Paragraph(f'<b>{self._format_number(total_receipt)}</b>', cell_style),
+            Paragraph(f'<b>{self._format_number(total_consumption)}</b>', cell_style),
+            Paragraph(f'<b>{self._format_number(total_correction)}</b>', cell_style)
+        ])
+        
+        # Ширина колонок для 4 колонок в книжном A4
         col_widths = [3.5*cm, 4.8*cm, 4.8*cm, 4.9*cm]
         table = Table(table_data, colWidths=col_widths, repeatRows=1)
         table_style = TableStyle([
@@ -659,9 +715,16 @@ class CementReportWindow(BaseToplevelWindow):
             ('RIGHTPADDING', (0, 0), (-1, -1), 3),
         ])
         
+        # Подсветка строк
         for i, row in enumerate(table_data[1:], start=1):
             row_text = str(row[0])
-            if 'Итого' in row_text:
+            if 'ИТОГО ЗА ПЕРИОД' in row_text:
+                # Общий итог за период — тёмно-серый фон + жирная линия сверху и снизу
+                table_style.add('BACKGROUND', (0, i), (-1, i), colors.HexColor('#d5dbdb'))
+                table_style.add('LINEABOVE', (0, i), (-1, i), 1, colors.black)
+                table_style.add('LINEBELOW', (0, i), (-1, i), 1, colors.black)
+            elif 'Итого' in row_text:
+                # Промежуточный итог — светло-серый фон + линия сверху
                 table_style.add('BACKGROUND', (0, i), (-1, i), colors.HexColor('#ecf0f1'))
                 table_style.add('LINEABOVE', (0, i), (-1, i), 0.5, colors.grey)
             elif i % 2 == 0:

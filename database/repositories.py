@@ -232,203 +232,132 @@ class CementSilosRepository:
 # ============================================================================
 # [ИЗМЕНЕНО] CementReceiptsRepository
 # ============================================================================
-"""
-Репозиторий для работы с поступлениями цемента.
-[ИЗМЕНЕНО]
-- Добавлены алиасы методов для совместимости с другими окнами
-- Корректная сортировка дат через substr() (формат ДД.ММ.ГГГГ)
-- delete_receipt() возвращает кортеж (success, message)
-- Добавлены методы для PDF-отчёта:
-    * get_monthly_report_with_corrections() — помесячный отчёт с разделением
-      поступлений и корректировок
-    * get_silo_daily_report() — отчёт по конкретному силосу по датам
-"""
-
 
 
 class CementReceiptsRepository:
-    """Репозиторий для работы с поступлениями цемента"""
-
+    """
+    Репозиторий для работы с поступлениями цемента.
+    [ИЗМЕНЕНО] 
+    - Добавлены алиасы для совместимости с другими окнами (get_all, add, update, delete, get_by_id)
+    - Методы add/update/delete теперь возвращают кортеж (success, message)
+    - Сортировка дат через substr() для корректной работы с форматом ДД.ММ.ГГГГ
+    - get_cement_report() теперь возвращает 6 значений с учётом корректировок
+    """
     def __init__(self):
         self.table_name = 'cement_receipts'
-
-    # ======================================================================
-    # ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ
-    # ======================================================================
-    def _parse_number(self, value):
-        """Преобразовать значение в число или None"""
-        if value is None or value == '':
-            return None
-        try:
-            if isinstance(value, str):
-                value = value.replace(',', '.').strip()
-            return float(value)
-        except (ValueError, TypeError):
-            return None
-
-    def _date_to_comparable(self, date_str):
-        """Преобразовать дату ДД.ММ.ГГГГ в строку ГГГГММДД"""
-        try:
-            parts = date_str.split('.')
-            if len(parts) == 3:
-                day, month, year = parts
-                return f"{year}{month.zfill(2)}{day.zfill(2)}"
-        except (ValueError, AttributeError):
-            pass
-        return ''
-
-    def _date_to_comparable_int(self, date_str):
-        """Преобразовать дату ДД.ММ.ГГГГ в число ГГГГММДД"""
-        cmp = self._date_to_comparable(date_str)
-        try:
-            return int(cmp) if cmp else 0
-        except ValueError:
-            return 0
-
-    # ======================================================================
-    # ПОЛУЧЕНИЕ ЗАПИСЕЙ
-    # ======================================================================
+    
+    # ========================================================================
+    # [ИЗМЕНЕНО] Корректная сортировка дат через substr()
+    # ========================================================================
     def get_all_receipts(self):
-        """Получить все поступления цемента (отсортировано по дате убывания)"""
+        """
+        Получить все поступления, отсортированные по дате (убывание).
+        [ИЗМЕНЕНО] Используется substr() для корректной сортировки дат в формате ДД.ММ.ГГГГ.
+        """
         conn = get_connection()
         cursor = conn.cursor()
-        try:
-            cursor.execute(f'''
-                SELECT id, receipt_date, silo_name, quantity_kg, supplier_name, is_correction
-                FROM {self.table_name}
-                ORDER BY 
-                    substr(receipt_date, 7, 4) || '-' ||
-                    substr(receipt_date, 4, 2) || '-' ||
-                    substr(receipt_date, 1, 2) DESC,
-                    id DESC
-            ''')
-            return cursor.fetchall()
-        finally:
-            conn.close()
-
+        cursor.execute(f'''
+            SELECT id, receipt_date, silo_name, quantity_kg, supplier_name, is_correction
+            FROM {self.table_name}
+            ORDER BY 
+                substr(receipt_date, 7, 4) || '-' || 
+                substr(receipt_date, 4, 2) || '-' || 
+                substr(receipt_date, 1, 2) DESC,
+                id DESC
+        ''')
+        result = cursor.fetchall()
+        conn.close()
+        return result
+    
+    # [НОВОЕ] Алиас для совместимости с другими окнами
     def get_all(self):
-        """Алиас для совместимости с окнами"""
+        """Алиас для get_all_receipts"""
         return self.get_all_receipts()
-
-    def get_all_paged(self, page=0, page_size=100):
-        """Получить поступления цемента постранично"""
-        conn = get_connection()
-        cursor = conn.cursor()
-        try:
-            cursor.execute(f'SELECT COUNT(*) FROM {self.table_name}')
-            total = cursor.fetchone()[0]
-            offset = max(0, int(page)) * max(1, int(page_size))
-            cursor.execute(f'''
-                SELECT id, receipt_date, silo_name, quantity_kg, supplier_name, is_correction
-                FROM {self.table_name}
-                ORDER BY 
-                    substr(receipt_date, 7, 4) || '-' ||
-                    substr(receipt_date, 4, 2) || '-' ||
-                    substr(receipt_date, 1, 2) DESC,
-                    id DESC
-                LIMIT ? OFFSET ?
-            ''', (page_size, offset))
-            rows = cursor.fetchall()
-            return rows, total
-        finally:
-            conn.close()
-
-    def get_receipt_by_id(self, receipt_id):
-        """Получить запись о поступлении по ID"""
-        conn = get_connection()
-        cursor = conn.cursor()
-        try:
-            cursor.execute(f'''
-                SELECT id, receipt_date, silo_name, quantity_kg, supplier_name, is_correction
-                FROM {self.table_name}
-                WHERE id = ?
-            ''', (receipt_id,))
-            return cursor.fetchone()
-        finally:
-            conn.close()
-
-    def get_by_id(self, receipt_id):
-        """Алиас для совместимости с окнами"""
-        return self.get_receipt_by_id(receipt_id)
-
-    # ======================================================================
-    # ДОБАВЛЕНИЕ / ОБНОВЛЕНИЕ / УДАЛЕНИЕ
-    # ======================================================================
-    def add_receipt(self, receipt_date, silo_name, quantity_kg,
-                    supplier_name=None, is_correction=False):
-        """Добавить запись о поступлении цемента"""
+    
+    # ========================================================================
+    # [ИЗМЕНЕНО] add_receipt теперь возвращает кортеж (success, message)
+    # ========================================================================
+    def add_receipt(self, receipt_date, silo_name, quantity_kg, supplier_name=None, is_correction=False):
+        """Добавить запись о поступлении"""
         if not receipt_date:
             return False, "Дата не указана"
         if not silo_name:
             return False, "Силос цемента не выбран"
-        quantity = self._parse_number(quantity_kg)
-        if quantity is None:
-            return False, "Количество указано некорректно"
+        if quantity_kg is None:
+            return False, "Количество не указано"
         conn = get_connection()
         cursor = conn.cursor()
         try:
-            cursor.execute(f'''
-                INSERT INTO {self.table_name}
-                (receipt_date, silo_name, quantity_kg, supplier_name, is_correction)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (receipt_date, silo_name, quantity, supplier_name, 1 if is_correction else 0))
+            cursor.execute(
+                f'''INSERT INTO {self.table_name} 
+                    (receipt_date, silo_name, quantity_kg, supplier_name, is_correction) 
+                    VALUES (?, ?, ?, ?, ?)''',
+                (receipt_date, silo_name, quantity_kg, supplier_name, 1 if is_correction else 0)
+            )
             conn.commit()
             return True, "Поступление добавлено"
         except Exception as e:
-            conn.rollback()
             return False, f"Ошибка добавления: {e}"
         finally:
             conn.close()
-
+    
+    # [НОВОЕ] Алиас для совместимости
     def add(self, *args, **kwargs):
-        """Алиас для совместимости с окнами"""
+        """Алиас для add_receipt"""
         return self.add_receipt(*args, **kwargs)
-
-    def update_receipt(self, receipt_id, receipt_date, silo_name, quantity_kg,
+    
+    # ========================================================================
+    # [ИЗМЕНЕНО] update_receipt теперь возвращает кортеж (success, message)
+    # ========================================================================
+    def update_receipt(self, receipt_id, receipt_date, silo_name, quantity_kg, 
                        supplier_name=None, is_correction=False):
-        """Обновить запись о поступлении цемента"""
+        """Обновить запись о поступлении"""
         if not receipt_date:
             return False, "Дата не указана"
         if not silo_name:
             return False, "Силос цемента не выбран"
-        quantity = self._parse_number(quantity_kg)
-        if quantity is None:
-            return False, "Количество указано некорректно"
+        if quantity_kg is None:
+            return False, "Количество не указано"
         conn = get_connection()
         cursor = conn.cursor()
         try:
-            cursor.execute(f'SELECT COUNT(*) FROM {self.table_name} WHERE id = ?', (receipt_id,))
-            exists = cursor.fetchone()[0]
-            if not exists:
-                return False, "Запись не найдена"
-            cursor.execute(f'''
-                UPDATE {self.table_name}
-                SET receipt_date = ?, silo_name = ?, quantity_kg = ?,
-                    supplier_name = ?, is_correction = ?
-                WHERE id = ?
-            ''', (receipt_date, silo_name, quantity, supplier_name,
-                  1 if is_correction else 0, receipt_id))
+            cursor.execute(
+                f'''UPDATE {self.table_name} 
+                    SET receipt_date = ?, silo_name = ?, quantity_kg = ?, 
+                        supplier_name = ?, is_correction = ?
+                    WHERE id = ?''',
+                (receipt_date, silo_name, quantity_kg, supplier_name, 
+                 1 if is_correction else 0, receipt_id)
+            )
             conn.commit()
             return True, "Запись обновлена"
         except Exception as e:
-            conn.rollback()
             return False, f"Ошибка обновления: {e}"
         finally:
             conn.close()
-
+    
+    # [НОВОЕ] Алиас для совместимости
     def update(self, *args, **kwargs):
-        """Алиас для совместимости с окнами"""
+        """Алиас для update_receipt"""
         return self.update_receipt(*args, **kwargs)
-
+    
+    # ========================================================================
+    # [ИЗМЕНЕНО] delete_receipt теперь возвращает кортеж (success, message)
+    # ========================================================================
     def delete_receipt(self, receipt_id):
-        """Удалить запись о поступлении цемента"""
+        """
+        Удалить запись о поступлении.
+        [ИЗМЕНЕНО] Теперь возвращает (success, message) и проверяет существование записи.
+        """
         conn = get_connection()
         cursor = conn.cursor()
         try:
+            # Проверяем, существует ли запись
             cursor.execute(f'SELECT COUNT(*) FROM {self.table_name} WHERE id = ?', (receipt_id,))
-            exists = cursor.fetchone()[0]
-            if not exists:
+            count = cursor.fetchone()[0]
+            if count == 0:
                 return False, "Запись не найдена"
+            
             cursor.execute(f'DELETE FROM {self.table_name} WHERE id = ?', (receipt_id,))
             conn.commit()
             return True, "Запись удалена"
@@ -437,60 +366,81 @@ class CementReceiptsRepository:
             return False, f"Ошибка удаления: {e}"
         finally:
             conn.close()
-
+    
+    # [НОВОЕ] Алиас для совместимости с другими окнами
     def delete(self, *args, **kwargs):
-        """Алиас для совместимости с окнами"""
+        """Алиас для delete_receipt"""
         return self.delete_receipt(*args, **kwargs)
-
-    # ======================================================================
-    # ОСТАТКИ ПО СИЛОСАМ
-    # ======================================================================
+    
+    # ========================================================================
+    # Получение записи по ID
+    # ========================================================================
+    def get_receipt_by_id(self, receipt_id):
+        """Получить запись по ID"""
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(f'''
+            SELECT id, receipt_date, silo_name, quantity_kg, supplier_name, is_correction
+            FROM {self.table_name} WHERE id = ?
+        ''', (receipt_id,))
+        result = cursor.fetchone()
+        conn.close()
+        return result
+    
+    # [НОВОЕ] Алиас для совместимости с другими окнами
+    def get_by_id(self, receipt_id):
+        """Алиас для get_receipt_by_id"""
+        return self.get_receipt_by_id(receipt_id)
+    
+    # ========================================================================
+    # Баланс по силосам
+    # ========================================================================
     def get_current_balance_by_silo(self):
         """
         Получить текущий баланс по каждому силосу.
-        Баланс = сумма поступлений и корректировок - расход на производство.
+        Баланс = (сумма поступлений) - (сумма расхода на производство)
         """
         conn = get_connection()
         cursor = conn.cursor()
-        try:
-            cursor.execute('''
-                SELECT silo_name,
-                       SUM(
-                           CASE 
-                               WHEN source = 'receipt' THEN qty
-                               WHEN source = 'consumption' THEN -qty
-                               ELSE 0
-                           END
-                       ) AS balance
-                FROM (
-                    SELECT silo_name, quantity_kg AS qty, 'receipt' AS source
-                    FROM cement_receipts
-                    WHERE silo_name IS NOT NULL AND silo_name != ''
-                    UNION ALL
-                    SELECT silo_name, cement_kg AS qty, 'consumption' AS source
-                    FROM production
-                    WHERE silo_name IS NOT NULL AND silo_name != ''
-                      AND cement_kg IS NOT NULL AND cement_kg > 0
-                )
-                GROUP BY silo_name
-            ''')
-            return {row[0]: row[1] or 0 for row in cursor.fetchall()}
-        finally:
-            conn.close()
-
-    # ======================================================================
-    # [ИЗМЕНЕНО] ВИЗУАЛЬНЫЙ ОТЧЁТ ПО ДВИЖЕНИЮ ЦЕМЕНТА
-    # ======================================================================
+        # Сумма поступлений по силосам
+        cursor.execute('''
+            SELECT silo_name, SUM(quantity_kg) as total
+            FROM cement_receipts
+            GROUP BY silo_name
+        ''')
+        receipts = {row[0]: row[1] for row in cursor.fetchall()}
+        # Сумма расхода на производство по силосам
+        cursor.execute('''
+            SELECT silo_name, SUM(cement_kg) as total
+            FROM production
+            WHERE silo_name IS NOT NULL AND silo_name != '' 
+                  AND cement_kg IS NOT NULL AND cement_kg > 0
+            GROUP BY silo_name
+        ''')
+        production_consumption = {row[0]: row[1] for row in cursor.fetchall()}
+        # Рассчитываем баланс
+        all_silos = set(receipts.keys()) | set(production_consumption.keys())
+        balance = {}
+        for silo in all_silos:
+            receipt_total = receipts.get(silo, 0) or 0
+            consumption_total = production_consumption.get(silo, 0) or 0
+            balance[silo] = receipt_total - consumption_total
+        conn.close()
+        return balance
+    
+    # ========================================================================
+    # [ИЗМЕНЕНО] Полный отчёт по движению цемента (теперь с корректировками)
+    # ========================================================================
     def get_cement_report(self):
         """
         Получить полный отчет по движению цемента.
-        Разделяет поступления и корректировки.
+        Объединяет данные из поступлений, расхода на производство и корректировок.
         
         [ИЗМЕНЕНО] Теперь возвращает 6 значений:
-            (date, silo_name, receipt_qty, consumption_qty, correction_qty, balance)
+        [(date, silo_name, receipt_qty, consumption_qty, correction_qty, balance), ...]
         
         Где:
-            - receipt_qty: обычные поступления (is_correction=0)
+            - receipt_qty: поступления (is_correction=0)
             - consumption_qty: расход на производство
             - correction_qty: корректировки (is_correction=1)
             - balance: накопительный остаток = receipt - consumption + correction
@@ -498,59 +448,44 @@ class CementReceiptsRepository:
         conn = get_connection()
         cursor = conn.cursor()
         try:
-            # 1. Обычные поступления (не корректировки), сгруппированные по дате и силосу
+            # 1. Получаем поступления цемента (НЕ корректировки)
             cursor.execute('''
-                SELECT receipt_date, silo_name, SUM(quantity_kg)
+                SELECT receipt_date, silo_name, quantity_kg
                 FROM cement_receipts
                 WHERE silo_name IS NOT NULL AND silo_name != ''
                   AND (is_correction IS NULL OR is_correction = 0)
-                GROUP BY receipt_date, silo_name
             ''')
-            receipts = {}
-            for date, silo, qty in cursor.fetchall():
-                key = (date, silo)
-                receipts[key] = receipts.get(key, 0) + (qty or 0)
-
-            # 2. Корректировки, сгруппированные по дате и силосу
+            receipts = cursor.fetchall()
+            
+            # 2. Получаем корректировки
             cursor.execute('''
-                SELECT receipt_date, silo_name, SUM(quantity_kg)
+                SELECT receipt_date, silo_name, quantity_kg
                 FROM cement_receipts
                 WHERE silo_name IS NOT NULL AND silo_name != ''
                   AND is_correction = 1
-                GROUP BY receipt_date, silo_name
             ''')
-            corrections = {}
-            for date, silo, qty in cursor.fetchall():
-                key = (date, silo)
-                corrections[key] = corrections.get(key, 0) + (qty or 0)
-
-            # 3. Расходы на производство, сгруппированные по дате и силосу
+            corrections = cursor.fetchall()
+            
+            # 3. Получаем расходы на производство
             cursor.execute('''
-                SELECT production_date, silo_name, SUM(cement_kg)
+                SELECT production_date, silo_name, cement_kg
                 FROM production
-                WHERE silo_name IS NOT NULL AND silo_name != ''
-                  AND cement_kg IS NOT NULL AND cement_kg > 0
-                GROUP BY production_date, silo_name
+                WHERE silo_name IS NOT NULL AND silo_name != '' 
+                      AND cement_kg IS NOT NULL AND cement_kg > 0
             ''')
-            consumptions = {}
-            for date, silo, qty in cursor.fetchall():
-                key = (date, silo)
-                consumptions[key] = consumptions.get(key, 0) + (qty or 0)
-
-            # 4. Объединяем все ключи (дата + силос)
-            all_keys = (set(receipts.keys()) |
-                        set(corrections.keys()) |
-                        set(consumptions.keys()))
-
-            # 5. Формируем список операций
+            consumptions = cursor.fetchall()
+            
+            # 4. Объединяем в единый список операций
+            # Формат: (date, silo, receipt, consumption, correction)
             operations = []
-            for date, silo in all_keys:
-                receipt = receipts.get((date, silo), 0)
-                correction = corrections.get((date, silo), 0)
-                consumption = consumptions.get((date, silo), 0)
-                operations.append((date, silo, receipt, consumption, correction))
-
-            # 6. Сортируем по дате (возрастание) для правильного расчёта остатка
+            for date, silo, qty in receipts:
+                operations.append((date, silo, qty or 0, 0, 0))
+            for date, silo, qty in consumptions:
+                operations.append((date, silo, 0, qty or 0, 0))
+            for date, silo, qty in corrections:
+                operations.append((date, silo, 0, 0, qty or 0))
+            
+            # 5. Сортируем по дате (возрастание) для правильного расчета остатка
             def date_to_comparable(d):
                 try:
                     parts = d.split('.')
@@ -560,29 +495,22 @@ class CementReceiptsRepository:
                 except (ValueError, AttributeError):
                     pass
                 return 0
-
+            
             operations.sort(key=lambda x: date_to_comparable(x[0]))
-
-            # 7. Считаем накопительный остаток по каждому силосу
-            #    balance = receipt - consumption + correction
+            
+            # 6. Рассчитываем накопительный остаток по каждому силосу
+            # balance = receipt - consumption + correction
             silo_balances = {}
             result_with_balance = []
             for date, silo, receipt, consumption, correction in operations:
                 if silo not in silo_balances:
                     silo_balances[silo] = 0
-                silo_balances[silo] = (
-                    silo_balances[silo] + receipt - consumption + correction
-                )
+                silo_balances[silo] = silo_balances[silo] + receipt - consumption + correction
                 balance = silo_balances[silo]
-                result_with_balance.append((
-                    date, silo, receipt, consumption, correction, balance
-                ))
-
-            # 8. Сортируем по дате (убывание) для отображения
-            result_with_balance.sort(
-                key=lambda x: date_to_comparable(x[0]),
-                reverse=True
-            )
+                result_with_balance.append((date, silo, receipt, consumption, correction, balance))
+            
+            # 7. Сортируем по дате (убывание) для отображения
+            result_with_balance.sort(key=lambda x: date_to_comparable(x[0]), reverse=True)
             return result_with_balance
         except Exception as e:
             print(f"Ошибка в get_cement_report: {e}")
@@ -590,87 +518,309 @@ class CementReceiptsRepository:
         finally:
             conn.close()
 
-            
-    # ======================================================================
-    # СТАРЫЙ МЕСЯЧНЫЙ ОТЧЁТ
-    # ======================================================================
-    def get_cement_monthly_report(self, start_date, end_date, silo_name=None):
-        """Получить месячный отчет по цементу за период."""
+        # ========================================================================
+    # [НОВОЕ] Месячный отчёт с учётом расхода на производство и корректировок
+    # ========================================================================
+    def get_monthly_report_with_corrections(self, start_date, end_date):
+        """
+        Получить месячный отчёт по всем силосам с поступлениями, расходом и корректировками.
+        
+        Возвращает список кортежей:
+            [(sort_key, month_str, silo_name, receipt, consumption, correction), ...]
+        
+        Где:
+            - sort_key: ключ сортировки (ГГГГММ)
+            - month_str: название месяца с годом ("Ноябрь 2026")
+            - silo_name: название силоса
+            - receipt: сумма поступлений за месяц (кг)
+            - consumption: сумма расхода на производство за месяц (кг)
+            - correction: сумма корректировок за месяц (кг)
+        
+        Отсортировано по убыванию месяца, затем по названию силоса.
+        """
         conn = get_connection()
         cursor = conn.cursor()
         try:
-            start_cmp = self._date_to_comparable(start_date)
-            end_cmp = self._date_to_comparable(end_date)
-            if silo_name:
-                cursor.execute('''
-                    SELECT substr(receipt_date, 4, 2) AS month_num,
-                           substr(receipt_date, 7, 4) AS year_num,
-                           silo_name, SUM(quantity_kg) AS total
-                    FROM cement_receipts
-                    WHERE silo_name = ?
-                      AND substr(receipt_date, 7, 4) || substr(receipt_date, 4, 2) || substr(receipt_date, 1, 2)
-                          BETWEEN ? AND ?
-                    GROUP BY month_num, year_num, silo_name
-                ''', (silo_name, start_cmp, end_cmp))
-            else:
-                cursor.execute('''
-                    SELECT substr(receipt_date, 4, 2) AS month_num,
-                           substr(receipt_date, 7, 4) AS year_num,
-                           silo_name, SUM(quantity_kg) AS total
-                    FROM cement_receipts
-                    WHERE silo_name IS NOT NULL AND silo_name != ''
-                      AND substr(receipt_date, 7, 4) || substr(receipt_date, 4, 2) || substr(receipt_date, 1, 2)
-                          BETWEEN ? AND ?
-                    GROUP BY month_num, year_num, silo_name
-                ''', (start_cmp, end_cmp))
-            receipts = {
-                (m, y, s): t or 0
-                for m, y, s, t in cursor.fetchall()
-            }
-            if silo_name:
-                cursor.execute('''
-                    SELECT substr(production_date, 4, 2) AS month_num,
-                           substr(production_date, 7, 4) AS year_num,
-                           silo_name, SUM(cement_kg) AS total
-                    FROM production
-                    WHERE silo_name = ? AND cement_kg IS NOT NULL AND cement_kg > 0
-                      AND substr(production_date, 7, 4) || substr(production_date, 4, 2) || substr(production_date, 1, 2)
-                          BETWEEN ? AND ?
-                    GROUP BY month_num, year_num, silo_name
-                ''', (silo_name, start_cmp, end_cmp))
-            else:
-                cursor.execute('''
-                    SELECT substr(production_date, 4, 2) AS month_num,
-                           substr(production_date, 7, 4) AS year_num,
-                           silo_name, SUM(cement_kg) AS total
-                    FROM production
-                    WHERE silo_name IS NOT NULL AND silo_name != ''
-                      AND cement_kg IS NOT NULL AND cement_kg > 0
-                      AND substr(production_date, 7, 4) || substr(production_date, 4, 2) || substr(production_date, 1, 2)
-                          BETWEEN ? AND ?
-                    GROUP BY month_num, year_num, silo_name
-                ''', (start_cmp, end_cmp))
-            consumptions = {
-                (m, y, s): t or 0
-                for m, y, s, t in cursor.fetchall()
-            }
-            all_keys = set(receipts.keys()) | set(consumptions.keys())
+            def to_comparable(date_str):
+                parts = date_str.split('.')
+                if len(parts) == 3:
+                    day, month, year = parts
+                    return f"{year}{month.zfill(2)}{day.zfill(2)}"
+                return ''
+            
+            start_cmp = to_comparable(start_date)
+            end_cmp = to_comparable(end_date)
+            
+            # 1. Поступления цемента (не корректировки)
+            cursor.execute('''
+                SELECT substr(receipt_date, 4, 2) as month_num,
+                       substr(receipt_date, 7, 4) as year_num,
+                       silo_name,
+                       SUM(quantity_kg) as total
+                FROM cement_receipts
+                WHERE silo_name IS NOT NULL AND silo_name != ''
+                  AND (is_correction IS NULL OR is_correction = 0)
+                  AND substr(receipt_date, 7, 4) || substr(receipt_date, 4, 2) || substr(receipt_date, 1, 2) 
+                      BETWEEN ? AND ?
+                GROUP BY month_num, year_num, silo_name
+            ''', (start_cmp, end_cmp))
+            receipts = {}
+            for month_num, year_num, silo, total in cursor.fetchall():
+                receipts[(month_num, year_num, silo)] = total or 0
+            
+            # 2. Расход цемента на производство
+            cursor.execute('''
+                SELECT substr(production_date, 4, 2) as month_num,
+                       substr(production_date, 7, 4) as year_num,
+                       silo_name,
+                       SUM(cement_kg) as total
+                FROM production
+                WHERE silo_name IS NOT NULL AND silo_name != ''
+                  AND cement_kg IS NOT NULL AND cement_kg > 0
+                  AND substr(production_date, 7, 4) || substr(production_date, 4, 2) || substr(production_date, 1, 2) 
+                      BETWEEN ? AND ?
+                GROUP BY month_num, year_num, silo_name
+            ''', (start_cmp, end_cmp))
+            consumptions = {}
+            for month_num, year_num, silo, total in cursor.fetchall():
+                consumptions[(month_num, year_num, silo)] = total or 0
+            
+            # 3. Корректировки
+            cursor.execute('''
+                SELECT substr(receipt_date, 4, 2) as month_num,
+                       substr(receipt_date, 7, 4) as year_num,
+                       silo_name,
+                       SUM(quantity_kg) as total
+                FROM cement_receipts
+                WHERE silo_name IS NOT NULL AND silo_name != ''
+                  AND is_correction = 1
+                  AND substr(receipt_date, 7, 4) || substr(receipt_date, 4, 2) || substr(receipt_date, 1, 2) 
+                      BETWEEN ? AND ?
+                GROUP BY month_num, year_num, silo_name
+            ''', (start_cmp, end_cmp))
+            corrections = {}
+            for month_num, year_num, silo, total in cursor.fetchall():
+                corrections[(month_num, year_num, silo)] = total or 0
+            
+            # 4. Объединяем все ключи
+            all_keys = set(receipts.keys()) | set(consumptions.keys()) | set(corrections.keys())
+            
             month_names = {
                 '01': 'Январь', '02': 'Февраль', '03': 'Март',
                 '04': 'Апрель', '05': 'Май', '06': 'Июнь',
                 '07': 'Июль', '08': 'Август', '09': 'Сентябрь',
                 '10': 'Октябрь', '11': 'Ноябрь', '12': 'Декабрь'
             }
+            
             result = []
             for month_num, year_num, silo in all_keys:
                 month_str = f"{month_names.get(month_num, month_num)} {year_num}"
                 sort_key = f"{year_num}{month_num}"
-                result.append((
-                    sort_key, month_str, silo,
-                    receipts.get((month_num, year_num, silo), 0),
-                    consumptions.get((month_num, year_num, silo), 0),
-                    0
-                ))
+                receipt = receipts.get((month_num, year_num, silo), 0)
+                consumption = consumptions.get((month_num, year_num, silo), 0)
+                correction = corrections.get((month_num, year_num, silo), 0)
+                result.append((sort_key, month_str, silo, receipt, consumption, correction))
+            
+            # 5. Сортируем: по убыванию месяца, затем по силосу
+            result.sort(key=lambda x: (-int(x[0]), x[2].lower()))
+            return result
+        except Exception as e:
+            print(f"Ошибка в get_monthly_report_with_corrections: {e}")
+            return []
+        finally:
+            conn.close()
+    
+    # ========================================================================
+    # [НОВОЕ] Дневной отчёт по конкретному силосу с расходом на производство
+    # ========================================================================
+    def get_silo_daily_report(self, silo_name, start_date, end_date):
+        """
+        Получить отчёт по конкретному силосу по дням с расходом на производство.
+        
+        Возвращает список кортежей:
+            [(date, receipt_qty, consumption_qty, is_correction), ...]
+        
+        Где:
+            - date: дата операции (ДД.ММ.ГГГГ)
+            - receipt_qty: количество поступления (0 для расхода и корректировок)
+            - consumption_qty: количество расхода на производство (0 для поступлений и корректировок)
+            - is_correction: 0 — поступление/расход, 1 — корректировка
+        
+        Отсортировано по дате (возрастание), затем корректировки — ПОСЛЕ обычных операций в тот же день.
+        """
+        conn = get_connection()
+        cursor = conn.cursor()
+        try:
+            def to_comparable(date_str):
+                parts = date_str.split('.')
+                if len(parts) == 3:
+                    day, month, year = parts
+                    return f"{year}{month.zfill(2)}{day.zfill(2)}"
+                return ''
+            
+            start_cmp = to_comparable(start_date)
+            end_cmp = to_comparable(end_date)
+            
+            # 1. Поступления и корректировки из cement_receipts
+            cursor.execute('''
+                SELECT receipt_date, quantity_kg, is_correction
+                FROM cement_receipts
+                WHERE silo_name = ?
+                  AND substr(receipt_date, 7, 4) || substr(receipt_date, 4, 2) || substr(receipt_date, 1, 2) 
+                      BETWEEN ? AND ?
+            ''', (silo_name, start_cmp, end_cmp))
+            receipts_rows = cursor.fetchall()
+            
+            # 2. Расход на производство по датам
+            cursor.execute('''
+                SELECT production_date, SUM(cement_kg) as total
+                FROM production
+                WHERE silo_name = ?
+                  AND cement_kg IS NOT NULL AND cement_kg > 0
+                  AND substr(production_date, 7, 4) || substr(production_date, 4, 2) || substr(production_date, 1, 2) 
+                      BETWEEN ? AND ?
+                GROUP BY production_date
+            ''', (silo_name, start_cmp, end_cmp))
+            consumptions = {row[0]: row[1] or 0 for row in cursor.fetchall()}
+            
+            # 3. Группируем поступления и корректировки по датам ОТДЕЛЬНО
+            receipts_by_date = {}
+            corrections_by_date = {}
+            for date, qty, is_corr in receipts_rows:
+                if is_corr == 1:
+                    corrections_by_date[date] = corrections_by_date.get(date, 0) + (qty or 0)
+                else:
+                    receipts_by_date[date] = receipts_by_date.get(date, 0) + (qty or 0)
+            
+            # 4. Собираем ВСЕ операции в один список
+            # Формат: (date, receipt_qty, consumption_qty, is_correction)
+            operations = []
+            
+            # Обычные операции (поступления + расход)
+            all_normal_dates = set(receipts_by_date.keys()) | set(consumptions.keys())
+            for date in all_normal_dates:
+                receipt = receipts_by_date.get(date, 0)
+                consumption = consumptions.get(date, 0)
+                operations.append((date, receipt, consumption, 0))
+            
+            # Корректировки — тоже в общий список
+            for date, qty in corrections_by_date.items():
+                operations.append((date, qty, 0, 1))
+            
+            # 5. Сортируем по дате (возрастание), корректировки — ПОСЛЕ обычных в тот же день
+            def sort_key(op):
+                date, receipt, consumption, is_corr = op
+                return (to_comparable(date), is_corr)
+            
+            operations.sort(key=sort_key)
+            
+            return operations
+        except Exception as e:
+            print(f"Ошибка в get_silo_daily_report: {e}")
+            return []
+        finally:
+            conn.close()
+    
+    # ========================================================================
+    # Месячный отчёт по цементу
+    # ========================================================================
+    def get_cement_monthly_report(self, start_date, end_date, silo_name=None):
+        """Получить месячный отчет по цементу за период."""
+        conn = get_connection()
+        cursor = conn.cursor()
+        try:
+            def to_comparable(date_str):
+                parts = date_str.split('.')
+                if len(parts) == 3:
+                    day, month, year = parts
+                    return f"{year}{month.zfill(2)}{day.zfill(2)}"
+                return ''
+            start_cmp = to_comparable(start_date)
+            end_cmp = to_comparable(end_date)
+            
+            # 1. Поступления по месяцам и силосам
+            if silo_name:
+                cursor.execute('''
+                    SELECT substr(receipt_date, 4, 2) as month_num,
+                           substr(receipt_date, 7, 4) as year_num,
+                           silo_name,
+                           SUM(quantity_kg) as total
+                    FROM cement_receipts
+                    WHERE silo_name = ?
+                      AND substr(receipt_date, 7, 4) || substr(receipt_date, 4, 2) || substr(receipt_date, 1, 2) 
+                          BETWEEN ? AND ?
+                    GROUP BY month_num, year_num, silo_name
+                ''', (silo_name, start_cmp, end_cmp))
+            else:
+                cursor.execute('''
+                    SELECT substr(receipt_date, 4, 2) as month_num,
+                           substr(receipt_date, 7, 4) as year_num,
+                           silo_name,
+                           SUM(quantity_kg) as total
+                    FROM cement_receipts
+                    WHERE silo_name IS NOT NULL AND silo_name != ''
+                      AND substr(receipt_date, 7, 4) || substr(receipt_date, 4, 2) || substr(receipt_date, 1, 2) 
+                          BETWEEN ? AND ?
+                    GROUP BY month_num, year_num, silo_name
+                ''', (start_cmp, end_cmp))
+            receipts = {}
+            for month_num, year_num, silo, total in cursor.fetchall():
+                receipts[(month_num, year_num, silo)] = total or 0
+            
+            # 2. Расход на производство по месяцам и силосам
+            if silo_name:
+                cursor.execute('''
+                    SELECT substr(production_date, 4, 2) as month_num,
+                           substr(production_date, 7, 4) as year_num,
+                           silo_name,
+                           SUM(cement_kg) as total
+                    FROM production
+                    WHERE silo_name = ?
+                      AND silo_name IS NOT NULL AND silo_name != ''
+                      AND cement_kg IS NOT NULL AND cement_kg > 0
+                      AND substr(production_date, 7, 4) || substr(production_date, 4, 2) || substr(production_date, 1, 2) 
+                          BETWEEN ? AND ?
+                    GROUP BY month_num, year_num, silo_name
+                ''', (silo_name, start_cmp, end_cmp))
+            else:
+                cursor.execute('''
+                    SELECT substr(production_date, 4, 2) as month_num,
+                           substr(production_date, 7, 4) as year_num,
+                           silo_name,
+                           SUM(cement_kg) as total
+                    FROM production
+                    WHERE silo_name IS NOT NULL AND silo_name != ''
+                      AND cement_kg IS NOT NULL AND cement_kg > 0
+                      AND substr(production_date, 7, 4) || substr(production_date, 4, 2) || substr(production_date, 1, 2) 
+                          BETWEEN ? AND ?
+                    GROUP BY month_num, year_num, silo_name
+                ''', (start_cmp, end_cmp))
+            consumptions = {}
+            for month_num, year_num, silo, total in cursor.fetchall():
+                consumptions[(month_num, year_num, silo)] = total or 0
+            
+            # 3. Объединяем все ключи
+            all_keys = set(receipts.keys()) | set(consumptions.keys())
+            
+            # 4. Названия месяцев
+            month_names = {
+                '01': 'Январь', '02': 'Февраль', '03': 'Март',
+                '04': 'Апрель', '05': 'Май', '06': 'Июнь',
+                '07': 'Июль', '08': 'Август', '09': 'Сентябрь',
+                '10': 'Октябрь', '11': 'Ноябрь', '12': 'Декабрь'
+            }
+            
+            # 5. Формируем итоговый список
+            result = []
+            for month_num, year_num, silo in all_keys:
+                month_str = f"{month_names.get(month_num, month_num)} {year_num}"
+                sort_key = f"{year_num}{month_num}"
+                receipt_total = receipts.get((month_num, year_num, silo), 0)
+                consumption_total = consumptions.get((month_num, year_num, silo), 0)
+                adjustment = 0
+                result.append((sort_key, month_str, silo, receipt_total, consumption_total, adjustment))
+            
+            # 6. Сортируем: по убыванию месяца, затем по силосу
             result.sort(key=lambda x: (-int(x[0]), x[2].lower()))
             return result
         except Exception as e:
@@ -679,198 +829,6 @@ class CementReceiptsRepository:
         finally:
             conn.close()
 
-    # ======================================================================
-    # PDF: ОБЩИЙ ОТЧЁТ С КОРРЕКТИРОВКАМИ И РАСХОДОМ
-    # ======================================================================
-    def get_monthly_report_with_corrections(self, start_date, end_date):
-        """
-        Получить месячный отчёт по всем силосам:
-        - поступление цемента;
-        - расход цемента на производство;
-        - корректировка.
-        """
-        conn = get_connection()
-        cursor = conn.cursor()
-        try:
-            start_cmp = self._date_to_comparable(start_date)
-            end_cmp = self._date_to_comparable(end_date)
-
-            # 1. Обычные поступления
-            cursor.execute('''
-                SELECT substr(receipt_date, 4, 2) AS month_num,
-                       substr(receipt_date, 7, 4) AS year_num,
-                       silo_name, SUM(quantity_kg) AS total
-                FROM cement_receipts
-                WHERE silo_name IS NOT NULL AND silo_name != ''
-                  AND (is_correction IS NULL OR is_correction = 0)
-                  AND substr(receipt_date, 7, 4) || substr(receipt_date, 4, 2) || substr(receipt_date, 1, 2)
-                      BETWEEN ? AND ?
-                GROUP BY month_num, year_num, silo_name
-            ''', (start_cmp, end_cmp))
-            receipts = {
-                (m, y, s): t or 0
-                for m, y, s, t in cursor.fetchall()
-            }
-
-            # 2. Расход на производство
-            cursor.execute('''
-                SELECT substr(production_date, 4, 2) AS month_num,
-                       substr(production_date, 7, 4) AS year_num,
-                       silo_name, SUM(cement_kg) AS total
-                FROM production
-                WHERE silo_name IS NOT NULL AND silo_name != ''
-                  AND cement_kg IS NOT NULL AND cement_kg > 0
-                  AND substr(production_date, 7, 4) || substr(production_date, 4, 2) || substr(production_date, 1, 2)
-                      BETWEEN ? AND ?
-                GROUP BY month_num, year_num, silo_name
-            ''', (start_cmp, end_cmp))
-            consumptions = {
-                (m, y, s): t or 0
-                for m, y, s, t in cursor.fetchall()
-            }
-
-            # 3. Корректировки
-            cursor.execute('''
-                SELECT substr(receipt_date, 4, 2) AS month_num,
-                       substr(receipt_date, 7, 4) AS year_num,
-                       silo_name, SUM(quantity_kg) AS total
-                FROM cement_receipts
-                WHERE silo_name IS NOT NULL AND silo_name != ''
-                  AND is_correction = 1
-                  AND substr(receipt_date, 7, 4) || substr(receipt_date, 4, 2) || substr(receipt_date, 1, 2)
-                      BETWEEN ? AND ?
-                GROUP BY month_num, year_num, silo_name
-            ''', (start_cmp, end_cmp))
-            corrections = {
-                (m, y, s): t or 0
-                for m, y, s, t in cursor.fetchall()
-            }
-
-            all_keys = (set(receipts.keys()) |
-                        set(consumptions.keys()) |
-                        set(corrections.keys()))
-
-            month_names = {
-                '01': 'Январь', '02': 'Февраль', '03': 'Март',
-                '04': 'Апрель', '05': 'Май', '06': 'Июнь',
-                '07': 'Июль', '08': 'Август', '09': 'Сентябрь',
-                '10': 'Октябрь', '11': 'Ноябрь', '12': 'Декабрь'
-            }
-
-            result = []
-            for month_num, year_num, silo in all_keys:
-                month_str = f"{month_names.get(month_num, month_num)} {year_num}"
-                sort_key = f"{year_num}{month_num}"
-                result.append((
-                    sort_key, month_str, silo,
-                    receipts.get((month_num, year_num, silo), 0),
-                    consumptions.get((month_num, year_num, silo), 0),
-                    corrections.get((month_num, year_num, silo), 0)
-                ))
-            result.sort(key=lambda x: (-int(x[0]), x[2].lower()))
-            return result
-        except Exception as e:
-            print(f"Ошибка в get_monthly_report_with_corrections: {e}")
-            return []
-        finally:
-            conn.close()
-
-    # ======================================================================
-    # PDF: ДНЕВНОЙ ОТЧЁТ ПО ОДНОМУ СИЛОСУ
-    # ======================================================================
-def get_silo_daily_report(self, silo_name, start_date, end_date):
-    """
-    Получить отчёт по конкретному силосу по дням с расходом на производство.
-    
-    [ИЗМЕНЕНО] Корректировки теперь возвращаются в общем хронологическом списке
-    вместе с поступлениями и расходом, чтобы отчёт мог группировать итоги
-    перед каждой корректировкой.
-    
-    Возвращает список кортежей:
-        [(date, receipt_qty, consumption_qty, is_correction), ...]
-    
-    Где:
-        - date: дата операции (ДД.ММ.ГГГГ)
-        - receipt_qty: количество поступления (0 для расхода и корректировок)
-        - consumption_qty: количество расхода на производство (0 для поступлений и корректировок)
-        - is_correction: 0 — поступление/расход, 1 — корректировка
-    
-    Отсортировано по дате (возрастание). В пределах одной даты сначала идут
-    обычные операции, затем корректировки.
-    """
-    conn = get_connection()
-    cursor = conn.cursor()
-    try:
-        def to_comparable(date_str):
-            parts = date_str.split('.')
-            if len(parts) == 3:
-                day, month, year = parts
-                return f"{year}{month.zfill(2)}{day.zfill(2)}"
-            return ''
-        
-        start_cmp = to_comparable(start_date)
-        end_cmp = to_comparable(end_date)
-        
-        # 1. Поступления и корректировки из cement_receipts
-        cursor.execute('''
-            SELECT receipt_date, quantity_kg, is_correction
-            FROM cement_receipts
-            WHERE silo_name = ?
-              AND substr(receipt_date, 7, 4) || substr(receipt_date, 4, 2) || substr(receipt_date, 1, 2) 
-                  BETWEEN ? AND ?
-        ''', (silo_name, start_cmp, end_cmp))
-        receipts_rows = cursor.fetchall()
-        
-        # 2. Расход на производство по датам
-        cursor.execute('''
-            SELECT production_date, SUM(cement_kg) as total
-            FROM production
-            WHERE silo_name = ?
-              AND cement_kg IS NOT NULL AND cement_kg > 0
-              AND substr(production_date, 7, 4) || substr(production_date, 4, 2) || substr(production_date, 1, 2) 
-                  BETWEEN ? AND ?
-            GROUP BY production_date
-        ''', (silo_name, start_cmp, end_cmp))
-        consumptions = {row[0]: row[1] or 0 for row in cursor.fetchall()}
-        
-        # 3. Группируем поступления и корректировки по датам ОТДЕЛЬНО
-        receipts_by_date = {}
-        corrections_by_date = {}
-        for date, qty, is_corr in receipts_rows:
-            if is_corr == 1:
-                corrections_by_date[date] = corrections_by_date.get(date, 0) + (qty or 0)
-            else:
-                receipts_by_date[date] = receipts_by_date.get(date, 0) + (qty or 0)
-        
-        # 4. Собираем ВСЕ операции в один список
-        # Формат: (date, receipt_qty, consumption_qty, is_correction)
-        operations = []
-        
-        # Обычные операции (поступления + расход)
-        all_normal_dates = set(receipts_by_date.keys()) | set(consumptions.keys())
-        for date in all_normal_dates:
-            receipt = receipts_by_date.get(date, 0)
-            consumption = consumptions.get(date, 0)
-            operations.append((date, receipt, consumption, 0))
-        
-        # Корректировки
-        for date, qty in corrections_by_date.items():
-            operations.append((date, qty, 0, 1))
-        
-        # 5. Сортируем по дате, корректировки — ПОСЛЕ обычных операций в тот же день
-        def sort_key(op):
-            date, receipt, consumption, is_corr = op
-            return (to_comparable(date), is_corr)
-        
-        operations.sort(key=sort_key)
-        
-        return operations
-    except Exception as e:
-        print(f"Ошибка в get_silo_daily_report: {e}")
-        return []
-    finally:
-        conn.close()
-                    
 class ProductionRepository:
     """Репозиторий для работы с производством продукции"""
     def __init__(self):
