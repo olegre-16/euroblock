@@ -1,7 +1,8 @@
 """
-Главное окно программы "ООО Евроблок"
-[ИЗМЕНЕНО] В блоке "Склад" колонка "Резерв" теперь учитывает частичные реализации.
+Главное окно программы "ООО Евроблок".
+[ИЗМЕНЕНО] В заголовке окна отображается режим работы (СЕТЬ/СЕРВЕР/локальный).
 """
+import os
 import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import datetime
@@ -30,7 +31,20 @@ from utils.resources import load_logo, set_window_icon
 class EuroblockApp:
     def __init__(self, root, logo_image=None):
         self.root = root
-        self.root.title("ООО Евроблок - производство и финансы")
+        
+        # [НОВОЕ] Определяем режим работы для заголовка
+        try:
+            from client_config import MODE, NETWORK_DB_PATH
+            if MODE == 'network':
+                db_name = os.path.basename(NETWORK_DB_PATH) if NETWORK_DB_PATH else 'сеть'
+                self.root.title(f"ООО Евроблок - производство и финансы [СЕТЬ: {db_name}]")
+            elif MODE == 'server':
+                self.root.title("ООО Евроблок - производство и финансы [СЕРВЕР]")
+            else:
+                self.root.title("ООО Евроблок - производство и финансы")
+        except ImportError:
+            self.root.title("ООО Евроблок - производство и финансы")
+        
         self.root.state('zoomed')
         self.root.configure(bg=COLORS['background'])
         
@@ -287,6 +301,31 @@ class EuroblockApp:
         for widget in self.work_area.winfo_children():
             widget.destroy()
         self.current_settings_panel = None
+    
+    def _destroy_current_window_safely(self):
+        """Безопасно уничтожить текущее открытое окно."""
+        if self.current_window is not None:
+            try:
+                window = None
+                if hasattr(self.current_window, 'window'):
+                    window = self.current_window.window
+                elif hasattr(self.current_window, 'main_frame'):
+                    toplevel = self.current_window.main_frame.winfo_toplevel()
+                    if str(toplevel) != str(self.root):
+                        window = toplevel
+                
+                if window is not None and window.winfo_exists():
+                    try:
+                        window.grab_release()
+                    except tk.TclError:
+                        pass
+                    window.destroy()
+            except tk.TclError:
+                pass
+            except Exception as e:
+                print(f"⚠ Ошибка закрытия окна: {e}")
+            finally:
+                self.current_window = None
     
     def show_welcome(self):
         """Показать приветственную рабочую область с тремя блоками"""
@@ -585,15 +624,8 @@ class EuroblockApp:
         new_stock_entry.focus_set()
         self.root.wait_window(dialog)
     
-    # ========================================================================
-    # [ИЗМЕНЕНО] load_warehouse_data — учитывает частичные реализации резервов
-    # ========================================================================
     def load_warehouse_data(self):
-        """
-        Загружает данные в таблицу "Склад".
-        [ИЗМЕНЕНО] Колонка "Резерв" теперь показывает остаток резерва
-        после вычета реализованного количества.
-        """
+        """Загружает данные в таблицу 'Склад'."""
         for item in self.warehouse_tree.get_children():
             self.warehouse_tree.delete(item)
         
@@ -601,7 +633,6 @@ class EuroblockApp:
         all_products = products_repo.get_all()
         volume_map = {row[0]: (row[1] if row[1] else 1) for row in all_products}
         
-        # 1. Произведено (с учётом volume_per_pallet)
         stock_grouped = {}
         for row in records:
             product = row[4]
@@ -613,43 +644,27 @@ class EuroblockApp:
             key = (product.strip(), color.strip())
             stock_grouped[key] = stock_grouped.get(key, 0) + calc_qty
         
-        # 2. Корректировки
         adjustments = adjustment_repo.get_adjustments_sum()
         for key, diff in adjustments.items():
             stock_grouped[key] = stock_grouped.get(key, 0) + diff
         
-        # 3. Продано из резерва (старый механизм sold_from_reserve)
         sold_from_reserve_sum = reserved_products_repo.get_sold_sum()
         for key, sold_qty in sold_from_reserve_sum.items():
             stock_grouped[key] = stock_grouped.get(key, 0) - sold_qty
         
-        # 4. Прямые продажи
         direct_sales_sum = sales_repo.get_sales_sum()
         for key, sold_qty in direct_sales_sum.items():
             stock_grouped[key] = stock_grouped.get(key, 0) - sold_qty
         
-        # 5. [НОВОЕ] Резервы с учётом частичных реализаций
-        # Получаем карту всех реализаций по резервам ОДИН РАЗ
-        realizations_map = reserved_products_repo.get_realizations_map()
-        
         reserved_records = reserved_products_repo.get_all_reserved()
         reserved_grouped = {}
         for row in reserved_records:
-            res_id = row[0]
             product = row[3] or ''
             color = row[4] or ''
             quantity = row[5] or 0
-            
-            # Вычисляем реализованное из этого резерва
-            realized_total = sum(q for _, q in realizations_map.get(res_id, []))
-            remaining_reserve = (quantity or 0) - realized_total
-            
-            # Учитываем только неотрицательный остаток резерва
-            if remaining_reserve > 0:
-                key = (product.strip(), color.strip())
-                reserved_grouped[key] = reserved_grouped.get(key, 0) + remaining_reserve
+            key = (product.strip(), color.strip())
+            reserved_grouped[key] = reserved_grouped.get(key, 0) + quantity
         
-        # 6. Собираем все ключи
         all_keys = (set(stock_grouped.keys()) | 
                    set(reserved_grouped.keys()) | 
                    set(sold_from_reserve_sum.keys()) | 
@@ -668,8 +683,8 @@ class EuroblockApp:
             remaining_qty = stock_qty - reserved_qty
             
             has_activity = (key in sold_from_reserve_sum or 
-                           key in direct_sales_sum or 
-                           key in adjustments)
+                          key in direct_sales_sum or 
+                          key in adjustments)
             
             if stock_qty == 0 and reserved_qty == 0 and not has_activity:
                 continue
@@ -729,6 +744,8 @@ class EuroblockApp:
     
     def show_section(self, section_name):
         """Показать содержимое раздела главного меню."""
+        self._destroy_current_window_safely()
+        
         all_windows = {
             "Поступление цемента": CementReceiptWindow,
             "Производство продукции": ProductionWindow,
@@ -746,6 +763,7 @@ class EuroblockApp:
         if section_name in all_windows:
             self.disable_main_buttons()
             window_class = all_windows[section_name]
+            self.root.update_idletasks()
             self.current_window = window_class(self.root, self.hide_current_window)
         else:
             self.clear_work_area()
@@ -776,6 +794,7 @@ class EuroblockApp:
         content.pack(expand=True)
     
     def show_settings(self):
+        self._destroy_current_window_safely()
         self.clear_work_area()
         self.disable_main_buttons()
         self.current_settings_panel = SettingsPanel(
@@ -801,6 +820,7 @@ class EuroblockApp:
     
     def hide_current_window(self):
         """Разблокировать кнопки главного меню после закрытия окна"""
+        self.current_window = None
         self.clear_work_area()
         self.enable_main_buttons()
         self.show_welcome()

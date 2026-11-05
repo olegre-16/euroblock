@@ -1,18 +1,13 @@
 """
-Главный файл программы "ООО Евроблок"
-Автоматически проверяет и устанавливает reportlab при запуске.
-Поддержка многопользовательского режима.
-При запуске программа:
-- Проверяет наличие БД в папке программы
-- Если БД есть — использует существующую (данные сохраняются)
-- Если БД нет — создаёт новую (первый запуск)
-- Если БД повреждена — создаёт бэкап и новую БД
-- Загружает логотип и устанавливает его как иконку окна
+Главный файл программы "ООО Евроблок".
+[ИЗМЕНЕНО] Добавлена проверка первого запуска и мастер настройки.
 """
 import sys
 import subprocess
 import os
 import atexit
+import tkinter as tk
+
 
 # ============================================================================
 # ПРОВЕРКА И УСТАНОВКА ЗАВИСИМОСТЕЙ
@@ -23,6 +18,7 @@ def check_and_install_dependencies():
     print("ООО Евроблок - Проверка зависимостей")
     print("=" * 70)
     print()
+    
     try:
         import reportlab
         print(f"✓ reportlab - установлена (версия {reportlab.Version})")
@@ -30,12 +26,14 @@ def check_and_install_dependencies():
     except ImportError:
         print("✗ reportlab - НЕ установлена")
         missing = True
+    
     print()
+    
     if missing:
         print("Обнаружена отсутствующая библиотека: reportlab")
         print("Выполняется автоматическая установка...")
         print()
-        print("Установка reportlab...")
+        
         try:
             subprocess.check_call(
                 [sys.executable, "-m", "pip", "install", "reportlab", "--quiet"],
@@ -43,46 +41,75 @@ def check_and_install_dependencies():
                 stderr=subprocess.DEVNULL
             )
             print("✓ reportlab успешно установлена")
-            print()
-            print("=" * 70)
-            print("✓ Все зависимости успешно установлены!")
-            print("=" * 70)
-            print()
         except subprocess.CalledProcessError:
             print("✗ Ошибка при установке reportlab")
-            print()
-            print("=" * 70)
-            print("ОШИБКА УСТАНОВКИ")
-            print("=" * 70)
-            print()
-            print("Не удалось автоматически установить библиотеку reportlab.")
-            print()
-            print("Возможные причины:")
-            print("  1. Отсутствует интернет-соединение")
-            print("  2. Недостаточно прав для установки")
-            print("  3. Блокировка антивирусом или сетевым экраном")
-            print()
-            print("Решение:")
-            print("  1. Проверьте интернет-соединение")
-            print("  2. Запустите программу от имени администратора")
-            print("  3. Установите библиотеку вручную командой:")
-            print("     pip install reportlab")
-            print()
             input("Нажмите Enter для выхода...")
             sys.exit(1)
     else:
         print("✓ Все необходимые библиотеки установлены")
-        print()
-    print("Запуск программы...")
+    
     print()
 
-# Запускаем проверку
+
 check_and_install_dependencies()
+
+
+# ============================================================================
+# [НОВОЕ] ПРОВЕРКА ПЕРВОГО ЗАПУСКА И МАСТЕР НАСТРОЙКИ
+# ============================================================================
+def _get_config_dir():
+    """Получить папку с конфигурацией"""
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    else:
+        return os.path.dirname(os.path.abspath(__file__))
+
+
+def check_first_run_and_setup():
+    """
+    Проверить первый запуск и запустить мастер настройки.
+    Возвращает True, если настройка прошла успешно.
+    """
+    config_dir = _get_config_dir()
+    
+    # Импортируем модуль проверки первого запуска
+    try:
+        from ui.windows.setup_wizard import is_first_run, run_setup_wizard
+    except ImportError:
+        # Если модуль не найден — пропускаем мастер
+        return True
+    
+    if not is_first_run(config_dir):
+        # Уже настроено — пропускаем
+        return True
+    
+    # Первый запуск — показываем мастер настройки
+    print("→ Обнаружен первый запуск программы")
+    print("→ Запуск мастера настройки...")
+    print()
+    
+    # Создаём временное окно для мастера
+    temp_root = tk.Tk()
+    temp_root.withdraw()  # Скрываем главное окно
+    temp_root.title("Евроблок — первоначальная настройка")
+    
+    # Запускаем мастер
+    result = run_setup_wizard(temp_root, config_dir)
+    
+    temp_root.destroy()
+    
+    if result is None:
+        # Пользователь отменил настройку
+        print("✗ Настройка отменена пользователем")
+        return False
+    
+    print(f"✓ Настройка завершена: {result}")
+    return True
+
 
 # ============================================================================
 # ИМПОРТЫ
 # ============================================================================
-import tkinter as tk
 from tkinter import messagebox
 from config.settings import COLORS, FONTS
 from database.connection import (
@@ -91,42 +118,33 @@ from database.connection import (
 )
 from ui.main_window import EuroblockApp
 
+
 # ============================================================================
-# [НОВОЕ] ОЧИСТКА БЛОКИРОВОК ПРИ СТАРТЕ
+# ОЧИСТКА ПРИ СТАРТЕ
 # ============================================================================
 def cleanup_stale_locks_on_startup():
-    """
-    Очистить устаревшие блокировки при запуске программы.
-    Это решает проблему, когда после аварийного завершения программы
-    блокировки остаются в файле и мешают работе.
-    """
+    """Очистить устаревшие блокировки при запуске программы."""
     try:
         from database.locking import get_lock_manager
         lock_manager = get_lock_manager(DB_PATH)
-        # Очищаем блокировки старше 5 минут (300 секунд)
         lock_manager.cleanup_stale_locks(max_age=300)
         print("✓ Устаревшие блокировки очищены")
     except Exception as e:
         print(f"⚠ Не удалось очистить блокировки: {e}")
 
-# ============================================================================
-# [НОВОЕ] ОЧИСТКА ФАЙЛА УВЕДОМЛЕНИЙ ПРИ СТАРТЕ
-# ============================================================================
+
 def cleanup_notification_file_on_startup():
-    """
-    Очистить файл уведомлений при старте, если он слишком большой.
-    Предотвращает накопление старых уведомлений.
-    """
+    """Очистить файл уведомлений при старте, если он слишком большой."""
     try:
         notification_file = DB_PATH + '.notifications'
         if os.path.exists(notification_file):
             size = os.path.getsize(notification_file)
-            # Если файл больше 1 МБ — очищаем
             if size > 1024 * 1024:
                 os.remove(notification_file)
                 print(f"✓ Файл уведомлений очищен (был {size / 1024:.1f} КБ)")
     except Exception as e:
         print(f"⚠ Не удалось очистить файл уведомлений: {e}")
+
 
 # ============================================================================
 # ДИАГНОСТИКА
@@ -137,51 +155,18 @@ def run_diagnostics():
     print("\n" + "=" * 70)
     print("ДИАГНОСТИКА ПРОИЗВОДИТЕЛЬНОСТИ")
     print("=" * 70)
+    
     try:
         info = get_database_info()
         print(f"\nБаза данных: {info['path']}")
         print(f"Размер: {info['size_mb']} МБ")
         print(f"Версия БД: {info['version']}")
         print(f"Таблиц: {info['tables_count']}")
-        print("\nКоличество записей:")
-        for table, count in info['table_stats'].items():
-            print(f"  {table}: {count}")
     except Exception as e:
-        print(f"Ошибка получения информации о БД: {e}")
-    
-    print("\nПроверка целостности БД...")
-    validation = validate_database()
-    print(f"  Существует: {validation['exists']}")
-    print(f"  Валидна: {validation['valid']}")
-    print(f"  Целостность: {validation['integrity']}")
-    print(f"  Версия: {validation['version']}")
-    if validation['error']:
-        print(f"  Ошибка: {validation['error']}")
-    
-    print("\nТест скорости чтения...")
-    try:
-        from database.repositories import sales_repo
-        start = time.time()
-        data = sales_repo.get_all()
-        duration = time.time() - start
-        print(f"  Прочитано {len(data)} записей за {duration:.3f} сек")
-        if duration > 0:
-            print(f"  Скорость: {len(data)/duration:.0f} записей/сек")
-    except Exception as e:
-        print(f"  Ошибка: {e}")
-    
-    try:
-        from database.cache import query_cache
-        stats = query_cache.get_stats()
-        print(f"\nСтатистика кэша:")
-        print(f"  Размер: {stats['size']} / {stats['max_size']}")
-        print(f"  Попаданий: {stats['hits']}")
-        print(f"  Промахов: {stats['misses']}")
-        print(f"  Процент попаданий: {stats['hit_rate']}%")
-    except Exception as e:
-        print(f"Ошибка получения статистики кэша: {e}")
+        print(f"Ошибка: {e}")
     
     print("\n" + "=" * 70)
+
 
 # ============================================================================
 # ОСНОВНАЯ ФУНКЦИЯ
@@ -193,19 +178,63 @@ def main():
             run_diagnostics()
             return
         
+        # [НОВОЕ] Проверка первого запуска и мастер настройки
+        if not check_first_run_and_setup():
+            print("✗ Настройка не завершена. Завершение работы.")
+            return
+        
+        # Вывод информации о режиме работы
+        from client_config import MODE, print_mode_info, check_main_computer_available
+        print_mode_info()
+        print()
+        
+        # [НОВОЕ] Проверка доступности основного компьютера
+        if MODE == 'network':
+            check = check_main_computer_available()
+            if not check['available']:
+                # Основной компьютер недоступен
+                temp_root = tk.Tk()
+                temp_root.withdraw()
+                
+                result = messagebox.askretrycancel(
+                    "Основной компьютер недоступен",
+                    f"{check['error']}\n\n"
+                    f"Путь: {DB_PATH}\n\n"
+                    f"Повторить попытку подключения?"
+                )
+                
+                temp_root.destroy()
+                
+                if not result:
+                    # Пользователь хочет изменить настройки
+                    _reset_settings()
+                    return
+                else:
+                    # Повторная проверка
+                    check = check_main_computer_available()
+                    if not check['available']:
+                        messagebox.showerror(
+                            "Ошибка подключения",
+                            f"Не удалось подключиться к основному компьютеру.\n\n"
+                            f"{check['error']}"
+                        )
+                        return
+        
+        # Определяем путь к БД для отображения
         print()
         if database_exists():
             print(f"✓ База данных найдена: {DB_PATH}")
-            print(f"  Размер: {os.path.getsize(DB_PATH) / (1024*1024):.2f} МБ")
-            print()
+            try:
+                print(f"  Размер: {os.path.getsize(DB_PATH) / (1024*1024):.2f} МБ")
+            except:
+                pass
         else:
             print(f"→ База данных не найдена (первый запуск)")
             print(f"  Будет создана новая БД: {DB_PATH}")
-            print()
         
-        # ====================================================================
-        # [НОВОЕ] Очистка устаревших данных при запуске
-        # ====================================================================
+        print()
+        
+        # Очистка устаревших данных
         cleanup_stale_locks_on_startup()
         cleanup_notification_file_on_startup()
         
@@ -217,20 +246,20 @@ def main():
         # ====================================================================
         root = tk.Tk()
         
-        # ===== ЗАГРУЗКА ЛОГОТИПА И УСТАНОВКА ИКОНКИ ОКНА =====
+        # Загрузка логотипа
         from utils.resources import load_logo, set_window_icon
-        
-        # Загружаем оригинальный логотип
         logo_image = load_logo()
         if logo_image:
-            # Устанавливаем логотип как иконку окна
             set_window_icon(root, logo_image)
-            print(f"✓ Логотип загружен и установлен как иконка окна")
-            print(f"  Размер логотипа: {logo_image.width()}x{logo_image.height()} px")
-        else:
-            print("⚠ Логотип не найден, используется стандартная иконка")
         
-        # =========================================================
+        # Заголовок окна с информацией о режиме
+        if MODE == 'network':
+            db_name = os.path.basename(DB_PATH)
+            role = "ОСНОВНОЙ" if check.get('is_main', False) else "КЛИЕНТ"
+            root.title(f"ООО Евроблок [{role}]")
+        else:
+            root.title("ООО Евроблок - производство и финансы")
+        
         # Запуск приложения
         app = EuroblockApp(root, logo_image=logo_image)
         root.mainloop()
@@ -243,17 +272,32 @@ def main():
         print()
         print(f"Произошла ошибка при запуске программы:\n{e}")
         print()
-        if 'database' in str(e).lower() or 'sqlite' in str(e).lower():
-            print("Возможные решения:")
-            print("  1. Закройте все экземпляры программы")
-            print("  2. Проверьте, что файл euroblock.db не повреждён")
-            print("  3. При необходимости удалите файл euroblock.db")
-            print("     (все данные будут потеряны!)")
-            print()
-        print("Если проблема сохраняется, обратитесь к разработчику.")
-        print()
         input("Нажмите Enter для выхода...")
         sys.exit(1)
+
+
+def _reset_settings():
+    """Сбросить настройки и запустить мастер заново"""
+    config_dir = _get_config_dir()
+    config_file = os.path.join(config_dir, 'network_config.ini')
+    marker_file = os.path.join(config_dir, '.first_run_done')
+    
+    # Удаляем файлы конфигурации
+    try:
+        if os.path.exists(config_file):
+            os.remove(config_file)
+        if os.path.exists(marker_file):
+            os.remove(marker_file)
+        print("✓ Настройки сброшены")
+    except Exception as e:
+        print(f"✗ Ошибка сброса настроек: {e}")
+    
+    # Перезапускаем программу
+    print("→ Перезапуск программы...")
+    python = sys.executable
+    script = sys.argv[0]
+    os.execl(python, python, script)
+
 
 if __name__ == "__main__":
     main()

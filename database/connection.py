@@ -1,8 +1,14 @@
 """
-Модуль подключения и инициализации базы данных
-Поддержка многопользовательского режима и оптимизация производительности.
+Модуль подключения и инициализации базы данных.
+Поддержка многопользовательского режима (локальный/сетевой/серверный).
 При запуске проверяет наличие существующей БД и использует её,
 либо создаёт новую при первом запуске.
+[ИЗМЕНЕНО] 
+- Добавлена поддержка сетевого режима через file path
+- Добавлена проверка доступности сетевого пути
+- Увеличены таймауты для сетевого режима
+- Добавлена миграция 3: таблица reserve_sales_history
+- Версия БД обновлена до 1.0.1
 """
 import sqlite3
 import os
@@ -15,13 +21,30 @@ from datetime import datetime
 # ============================================================================
 # ОПРЕДЕЛЕНИЕ ПУТИ К БД
 # ============================================================================
-
 def get_db_path():
     """
     Получить путь к базе данных.
-    - Если запущено как EXE — папка с EXE-файлом
-    - Если запущено как скрипт — корень проекта
+    Приоритет:
+    1. Режим 'network' → путь из network_config.ini или переменных окружения
+    2. Режим 'server' → не используется (работа через HTTP)
+    3. Запуск из EXE → папка с EXE-файлом
+    4. Запуск из скрипта → корень проекта
     """
+    # Импортируем здесь, чтобы избежать циклического импорта
+    try:
+        from client_config import MODE, NETWORK_DB_PATH
+        
+        # Режим "network" — путь к БД в сетевой папке
+        if MODE == 'network' and NETWORK_DB_PATH:
+            return NETWORK_DB_PATH
+        
+        # Режим "server" — путь не нужен (работа через HTTP)
+        if MODE == 'server':
+            pass  # fallback на локальный путь
+    except ImportError:
+        pass
+    
+    # Локальный режим — стандартный путь
     if getattr(sys, 'frozen', False):
         base_path = os.path.dirname(sys.executable)
     else:
@@ -34,16 +57,62 @@ def get_db_path():
 DB_PATH = get_db_path()
 
 # Текущая версия структуры БД (для миграций)
-CURRENT_DB_VERSION = '1.0.0'
+CURRENT_DB_VERSION = '1.0.1'
+
+
+# ============================================================================
+# ПРОВЕРКА ДОСТУПНОСТИ СЕТЕВОГО ПУТИ
+# ============================================================================
+def check_network_path(db_path: str) -> dict:
+    """
+    Проверить доступность сетевого пути к БД.
+    Возвращает словарь с результатами проверки.
+    """
+    result = {
+        'accessible': False,
+        'path': db_path,
+        'db_exists': False,
+        'db_size': 0,
+        'writable': False,
+        'error': None
+    }
+    
+    try:
+        db_dir = os.path.dirname(db_path)
+        
+        # Проверяем доступность папки
+        if not os.path.exists(db_dir):
+            result['error'] = f"Сетевая папка недоступна: {db_dir}"
+            return result
+        
+        result['accessible'] = True
+        
+        # Проверяем существование БД
+        if os.path.exists(db_path):
+            result['db_exists'] = True
+            result['db_size'] = os.path.getsize(db_path)
+        
+        # Проверяем возможность записи
+        test_file = os.path.join(db_dir, '.write_test_temp')
+        try:
+            with open(test_file, 'w', encoding='utf-8') as f:
+                f.write('test')
+            os.remove(test_file)
+            result['writable'] = True
+        except Exception as e:
+            result['error'] = f"Нет прав на запись: {e}"
+    
+    except Exception as e:
+        result['error'] = f"Ошибка проверки: {e}"
+    
+    return result
 
 
 # ============================================================================
 # ПУЛ СОЕДИНЕНИЙ
 # ============================================================================
-
 class ConnectionPool:
     """Пул соединений с базой данных для многопользовательской работы"""
-    
     def __init__(self, db_path, pool_size=10):
         self.db_path = db_path
         self.pool_size = pool_size
@@ -57,13 +126,37 @@ class ConnectionPool:
             self.pool.append(conn)
     
     def _create_connection(self):
-        conn = sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
+        """Создать соединение с БД с учётом режима работы"""
+        try:
+            from client_config import MODE, BUSY_TIMEOUT
+            
+            # Для сетевого режима увеличиваем таймауты
+            if MODE == 'network':
+                timeout = max(BUSY_TIMEOUT, 60)  # Минимум 60 сек для сети
+            else:
+                timeout = 30.0
+        except ImportError:
+            timeout = 30.0
+        
+        conn = sqlite3.connect(self.db_path, timeout=timeout, check_same_thread=False)
+        
+        # Оптимизации для многопользовательской работы
         conn.execute('PRAGMA journal_mode=WAL')
-        conn.execute('PRAGMA busy_timeout=30000')
+        conn.execute(f'PRAGMA busy_timeout={int(timeout * 1000)}')
         conn.execute('PRAGMA cache_size=10000')
         conn.execute('PRAGMA synchronous=NORMAL')
         conn.execute('PRAGMA temp_store=MEMORY')
         conn.execute('PRAGMA foreign_keys=ON')
+        
+        # Дополнительные настройки для сетевого режима
+        try:
+            from client_config import MODE
+            if MODE == 'network':
+                conn.execute('PRAGMA wal_autocheckpoint=100')
+                conn.execute('PRAGMA locking_mode=NORMAL')
+        except ImportError:
+            pass
+        
         return conn
     
     def get_connection(self):
@@ -117,11 +210,9 @@ def return_connection(conn):
 # ============================================================================
 # ПРОВЕРКА И АНАЛИЗ БАЗЫ ДАННЫХ
 # ============================================================================
-
 def database_exists() -> bool:
     """
     Проверить, существует ли файл базы данных.
-    
     Returns:
         True, если файл euroblock.db существует в папке программы
     """
@@ -131,17 +222,16 @@ def database_exists() -> bool:
 def validate_database() -> dict:
     """
     Проверить целостность и валидность базы данных.
-    
     Returns:
-        Словарь с результатами проверки:
-        {
-            'exists': bool,           - существует ли файл
-            'valid': bool,            - валидна ли БД
-            'integrity': str,         - результат проверки целостности
-            'version': str,           - версия БД
-            'tables_count': int,      - количество таблиц
-            'error': str or None      - сообщение об ошибке
-        }
+         Словарь с результатами проверки:
+         {
+             'exists': bool,           - существует ли файл
+             'valid': bool,            - валидна ли БД
+             'integrity': str,         - результат проверки целостности
+             'version': str,           - версия БД
+             'tables_count': int,      - количество таблиц
+             'error': str or None      - сообщение об ошибке
+         }
     """
     result = {
         'exists': False,
@@ -189,7 +279,6 @@ def validate_database() -> dict:
         
         result['valid'] = True
         conn.close()
-        
     except sqlite3.DatabaseError as e:
         result['error'] = f'Ошибка базы данных: {e}'
     except Exception as e:
@@ -201,12 +290,10 @@ def validate_database() -> dict:
 def backup_database(backup_dir: str = None) -> str:
     """
     Создать резервную копию базы данных.
-    
     Args:
-        backup_dir: папка для бэкапа (по умолчанию — папка 'backups' рядом с БД)
-    
+         backup_dir: папка для бэкапа (по умолчанию — папка 'backups' рядом с БД)
     Returns:
-        Путь к созданному файлу бэкапа или None при ошибке
+         Путь к созданному файлу бэкапа или None при ошибке
     """
     if not database_exists():
         return None
@@ -214,7 +301,6 @@ def backup_database(backup_dir: str = None) -> str:
     try:
         if backup_dir is None:
             backup_dir = os.path.join(os.path.dirname(DB_PATH), 'backups')
-        
         os.makedirs(backup_dir, exist_ok=True)
         
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -222,7 +308,6 @@ def backup_database(backup_dir: str = None) -> str:
         
         shutil.copy2(DB_PATH, backup_file)
         return backup_file
-        
     except Exception as e:
         print(f"✗ Ошибка создания резервной копии: {e}")
         return None
@@ -231,11 +316,10 @@ def backup_database(backup_dir: str = None) -> str:
 def compare_version(v1: str, v2: str) -> int:
     """
     Сравнить две версии в формате "x.y.z".
-    
     Returns:
-        -1 если v1 < v2
-         0 если v1 == v2
-         1 если v1 > v2
+         -1 если v1 < v2
+          0 если v1 == v2
+          1 если v1 > v2
     """
     def parse_version(v):
         try:
@@ -257,16 +341,15 @@ def compare_version(v1: str, v2: str) -> int:
 # ============================================================================
 # ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ
 # ============================================================================
-
 def init_database():
     """
     Инициализация базы данных с проверкой существования.
-    
     Логика работы:
-    1. Если БД существует и валидна — используется существующая
-    2. Если БД не существует — создаётся новая
-    3. Если БД повреждена — создаётся бэкап и новая БД
-    4. Если версия БД старая — применяются миграции
+     1. Если БД существует и валидна — используется существующая
+     2. Если БД не существует — создаётся новая
+     3. Если БД повреждена — создаётся бэкап и новая БД
+     4. Если версия БД старая — применяются миграции
+    [ИЗМЕНЕНО] Добавлена поддержка сетевого режима.
     """
     print("=" * 70)
     print("Инициализация базы данных")
@@ -274,19 +357,60 @@ def init_database():
     print(f"Путь к БД: {DB_PATH}")
     print()
     
+    # Проверка сетевого пути
+    try:
+        from client_config import MODE
+        if MODE == 'network':
+            print("→ Режим: Сетевая база данных")
+            check_result = check_network_path(DB_PATH)
+            
+            if not check_result['accessible']:
+                print(f"✗ Ошибка: {check_result['error']}")
+                print()
+                print("Возможные причины:")
+                print("  1. Сетевая папка недоступна")
+                print("  2. Неверный путь в network_config.ini")
+                print("  3. Нет прав доступа к сетевой папке")
+                print("  4. Сетевое соединение отсутствует")
+                print()
+                print("Решение:")
+                print("  1. Проверьте путь в network_config.ini")
+                print("  2. Убедитесь, что сетевая папка доступна")
+                print("  3. Проверьте права доступа (чтение/запись)")
+                print("  4. Попробуйте открыть папку через Проводник")
+                print()
+                input("Нажмите Enter для выхода...")
+                sys.exit(1)
+            
+            print(f"✓ Сетевая папка доступна")
+            print(f"  - Запись разрешена: {'Да' if check_result['writable'] else 'НЕТ!'}")
+            
+            if not check_result['writable']:
+                print()
+                print("✗ ОШИБКА: Нет прав на запись в сетевую папку!")
+                print("  Обратитесь к администратору для предоставления прав.")
+                print()
+                input("Нажмите Enter для выхода...")
+                sys.exit(1)
+            
+            if check_result['db_exists']:
+                print(f"  - База данных найдена ({check_result['db_size'] / (1024*1024):.2f} МБ)")
+            else:
+                print(f"  - База данных будет создана (первый запуск)")
+            print()
+    except ImportError:
+        pass
+    
     # ========================================================================
     # ШАГ 1: Проверяем существование БД
     # ========================================================================
-    
     if database_exists():
         print("✓ Файл базы данных найден")
         
         # ====================================================================
         # ШАГ 2: Проверяем целостность
         # ====================================================================
-        
         validation = validate_database()
-        
         if validation['valid']:
             print(f"✓ База данных валидна")
             print(f"  - Версия БД: {validation['version']}")
@@ -297,9 +421,7 @@ def init_database():
             # ==================================================================
             # ШАГ 3: Проверяем версию и применяем миграции
             # ==================================================================
-            
             db_version = validation['version']
-            
             if compare_version(db_version, CURRENT_DB_VERSION) < 0:
                 print(f"→ Версия БД ({db_version}) старше текущей ({CURRENT_DB_VERSION})")
                 print("→ Применяются миграции...")
@@ -316,23 +438,18 @@ def init_database():
             # Инициализируем пул соединений
             get_pool()
             return
-        
         else:
             # ==================================================================
             # ШАГ 2.1: БД повреждена
             # ==================================================================
-            
             print(f"✗ База данных повреждена: {validation['error']}")
             print()
             print("→ Создаётся резервная копия повреждённой БД...")
-            
             backup_path = backup_database()
-            
             if backup_path:
                 print(f"✓ Резервная копия создана: {backup_path}")
                 print()
                 print("→ Создаётся новая база данных...")
-                
                 # Удаляем повреждённую БД
                 try:
                     os.remove(DB_PATH)
@@ -348,12 +465,10 @@ def init_database():
             else:
                 print("✗ Не удалось создать резервную копию")
                 print("→ Продолжаем с созданием новой БД...")
-    
     else:
         # ======================================================================
         # ШАГ 1.1: БД не существует — первый запуск
         # ======================================================================
-        
         print("→ База данных не найдена (первый запуск)")
         print("→ Создаётся новая база данных...")
         print()
@@ -361,7 +476,6 @@ def init_database():
     # =========================================================================
     # ШАГ 4: Создание новой БД
     # =========================================================================
-    
     _create_new_database()
     
     print()
@@ -375,12 +489,10 @@ def _create_new_database():
     """Создать новую базу данных со всеми таблицами и индексами"""
     conn = get_connection()
     cursor = conn.cursor()
-    
     try:
         # ====================================================================
         # ТАБЛИЦА НАСТРОЕК ПРИЛОЖЕНИЯ (должна быть первой)
         # ====================================================================
-        
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS app_settings (
                 key TEXT PRIMARY KEY,
@@ -404,7 +516,6 @@ def _create_new_database():
         # ====================================================================
         # СПРАВОЧНИКИ
         # ====================================================================
-        
         dictionaries = [
             'payment_types', 'materials', 'purposes', 'equipment',
             'payers', 'customers', 'suppliers', 'colors'
@@ -422,7 +533,6 @@ def _create_new_database():
         # ====================================================================
         # ОСНОВНЫЕ ТАБЛИЦЫ
         # ====================================================================
-        
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS products (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -513,6 +623,18 @@ def _create_new_database():
             )
         ''')
         
+        # [НОВОЕ] Таблица для истории реализаций из резерва
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS reserve_sales_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                reserve_id INTEGER NOT NULL,
+                sale_date TEXT NOT NULL,
+                quantity REAL NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (reserve_id) REFERENCES reserved_products(id)
+            )
+        ''')
+        
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS adjustments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -568,7 +690,6 @@ def _create_new_database():
         # ====================================================================
         # ИНДЕКСЫ
         # ====================================================================
-        
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_production_date ON production(production_date)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_sales_date ON sales(sale_date)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_cash_operations_date ON cash_operations(operation_date)')
@@ -583,9 +704,12 @@ def _create_new_database():
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_sales_date_product ON sales(sale_date, product_name)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_cement_receipts_silo_date ON cement_receipts(silo_name, receipt_date)')
         
+        # [НОВОЕ] Индексы для таблицы истории реализаций из резерва
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_reserve_sales_history_reserve ON reserve_sales_history(reserve_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_reserve_sales_history_date ON reserve_sales_history(sale_date)')
+        
         conn.commit()
         cursor.execute('ANALYZE')
-        
     except Exception as e:
         conn.rollback()
         print(f"✗ Ошибка создания БД: {e}")
@@ -597,18 +721,15 @@ def _create_new_database():
 def _apply_migrations(from_version: str):
     """
     Применить миграции от указанной версии до текущей.
-    
     Args:
-        from_version: версия БД, от которой нужно мигрировать
+         from_version: версия БД, от которой нужно мигрировать
     """
     conn = get_connection()
     cursor = conn.cursor()
-    
     try:
         # ====================================================================
         # МИГРАЦИЯ 1: Добавление таблицы app_settings (если её нет)
         # ====================================================================
-        
         if compare_version(from_version, '0.0.0') == 0:
             print("  → Миграция 1: Создание таблицы app_settings...")
             cursor.execute('''
@@ -618,23 +739,19 @@ def _apply_migrations(from_version: str):
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
-            
             cursor.execute('''
                 INSERT OR REPLACE INTO app_settings (key, value)
                 VALUES ('db_version', '1.0.0')
-            ''', )
-            
+            ''')
             cursor.execute('''
                 INSERT OR REPLACE INTO app_settings (key, value)
                 VALUES ('created_at', ?)
             ''', (datetime.now().strftime('%d.%m.%Y %H:%M:%S'),))
-            
             from_version = '1.0.0'
         
         # ====================================================================
         # МИГРАЦИЯ 2: Добавление поля equipment_name в sales (если нужно)
         # ====================================================================
-        
         if compare_version(from_version, '1.0.0') < 0:
             try:
                 cursor.execute('ALTER TABLE sales ADD COLUMN equipment_name TEXT')
@@ -643,18 +760,37 @@ def _apply_migrations(from_version: str):
                 pass  # Поле уже есть
         
         # ====================================================================
+        # МИГРАЦИЯ 3: Создание таблицы reserve_sales_history
+        # ====================================================================
+        if compare_version(from_version, '1.0.0') >= 0 and compare_version(from_version, '1.0.1') < 0:
+            print("  → Миграция 3: Создание таблицы reserve_sales_history...")
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS reserve_sales_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    reserve_id INTEGER NOT NULL,
+                    sale_date TEXT NOT NULL,
+                    quantity REAL NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (reserve_id) REFERENCES reserved_products(id)
+                )
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_reserve_sales_history_reserve 
+                ON reserve_sales_history(reserve_id)
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_reserve_sales_history_date 
+                ON reserve_sales_history(sale_date)
+            ''')
+            from_version = '1.0.1'
+        
+        # ====================================================================
         # БУДУЩИЕ МИГРАЦИИ добавляются здесь
         # ====================================================================
-        
-        # Пример:
-        # if compare_version(from_version, '1.1.0') < 0:
-        #     # Миграция для версии 1.1.0
-        #     pass
         
         # ====================================================================
         # Обновляем версию БД
         # ====================================================================
-        
         cursor.execute('''
             INSERT OR REPLACE INTO app_settings (key, value)
             VALUES ('db_version', ?)
@@ -666,9 +802,7 @@ def _apply_migrations(from_version: str):
         ''', (datetime.now().strftime('%d.%m.%Y %H:%M:%S'),))
         
         conn.commit()
-        
         print(f"  ✓ Миграции завершены. Текущая версия: {CURRENT_DB_VERSION}")
-        
     except Exception as e:
         conn.rollback()
         print(f"  ✗ Ошибка миграции: {e}")
@@ -680,7 +814,6 @@ def _apply_migrations(from_version: str):
 # ============================================================================
 # СЕРВИСНЫЕ ФУНКЦИИ
 # ============================================================================
-
 def optimize_database():
     """Оптимизировать базу данных"""
     conn = get_connection()
@@ -701,8 +834,10 @@ def get_database_info():
     try:
         cursor = conn.cursor()
         db_size = os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else 0
+        
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
         tables = [row[0] for row in cursor.fetchall()]
+        
         table_stats = {}
         for table in tables:
             cursor.execute(f"SELECT COUNT(*) FROM {table}")
