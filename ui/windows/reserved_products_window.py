@@ -476,31 +476,113 @@ class ReservedProductsWindow(BaseToplevelWindow):
         self.save_btn.config(text="Обновить")
 
     def delete_selected(self):
+        """
+        Удалить выбранную запись.
+        [ИЗМЕНЕНО] Явное восстановление состояния окна после всех операций.
+        """
         selected = self.tree.selection()
         if not selected:
-            messagebox.showwarning("Внимание", "Выберите запись для удаления")
+            self.show_warning("Внимание", "Выберите запись для удаления")
             return
+        
         res_id = int(selected[0])
         record = reserved_products_repo.get_by_id(res_id)
         if not record:
-            messagebox.showerror("Ошибка", "Запись не найдена")
+            self.show_error("Ошибка", "Запись не найдена")
             return
-        _, start_date, end_date, product, color, quantity, customer = record
-        if not messagebox.askyesno(
-            "Подтверждение",
-            f"Удалить резерв?\n\n"
-            f"Период: {start_date} - {end_date}\n"
-            f"Продукция: {product}\n"
-            f"Количество: {self._format_number(quantity)}\n\n"
-            f"Связанные отметки о реализации также будут удалены.\n"
-            f"Записи в журнале реализации останутся."
-        ):
-            return
+        
+        # [НОВОЕ] Проверяем, есть ли реализации по этому резерву
+        sales_history = reserved_products_repo.get_reserve_sales(res_id)
+        if sales_history:
+            sold_sum = sum(qty for _, qty in sales_history)
+            if not self.ask_yes_no(
+                "Подтверждение",
+                f"По этому резерву есть реализации (всего: {self._format_number(sold_sum)} шт/м2).\n\n"
+                f"Удалить резерв и всю историю реализаций?"
+            ):
+                # [НОВОЕ] Явно восстанавливаем окно после отмены
+                self._force_restore_window()
+                return
+        else:
+            _, start_date, end_date, product, color, quantity, customer = record
+            if not self.ask_yes_no(
+                "Подтверждение",
+                f"Удалить резерв?\n\n"
+                f"Период: {start_date} - {end_date}\n"
+                f"Продукция: {product}\n"
+                f"Количество: {self._format_number(quantity)}"
+            ):
+                # [НОВОЕ] Явно восстанавливаем окно после отмены
+                self._force_restore_window()
+                return
+        
         success, message = reserved_products_repo.delete(res_id)
+        
         if success:
             if self.editing_id == res_id:
                 self._clear_fields()
             self.load_reservations()
-            messagebox.showinfo("Успех", message)
+            self.show_info("Успех", message)
         else:
-            messagebox.showerror("Ошибка", message)
+            self.show_error("Ошибка", message)
+        
+        # [НОВОЕ] Явно восстанавливаем состояние окна после всех операций
+        self._force_restore_window()
+    
+    def _force_restore_window(self):
+        """
+        Принудительно восстановить окно в полноэкранном режиме.
+        [НОВОЕ] Вызывается после messagebox для гарантии, что окно не свёрнуто.
+        """
+        def _do_restore():
+            try:
+                if not self.window.winfo_exists():
+                    return
+                
+                # Разворачиваем, если свёрнуто
+                if self.window.state() == 'iconic':
+                    self.window.deiconify()
+                    self.window.update_idletasks()
+                
+                # Устанавливаем полноэкранный режим
+                self.window.state('zoomed')
+                
+                # Снимаем topmost
+                self.window.attributes('-topmost', False)
+                
+                # Поднимаем окно
+                self.window.lift()
+                self.window.focus_force()
+                self.window.update_idletasks()
+                
+                # Финальное поднятие через 100мс
+                self.window.after(100, self._final_raise)
+            except tk.TclError:
+                pass
+        
+        try:
+            self.window.after(10, _do_restore)
+        except tk.TclError:
+            pass
+    
+    def _final_raise(self):
+        """Финальное поднятие окна"""
+        try:
+            if not self.window.winfo_exists():
+                return
+            self.window.lift()
+            self.window.focus_force()
+            self.window.attributes('-topmost', True)
+            self.window.after(100, lambda: self.window.attributes('-topmost', False))
+        except tk.TclError:
+            pass
+        
+    def _on_auto_refresh(self):
+        """
+        Автообновление данных при изменении БД другим компьютером.
+        Вызывается таймером из BaseToplevelWindow каждые 3 секунды.
+        """
+        try:
+            self.load_reservations()
+        except Exception as e:
+            print(f"⚠ Ошибка автообновления в ReservedProductsWindow: {e}")

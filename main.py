@@ -1,12 +1,45 @@
 """
 Главный файл программы "ООО Евроблок".
-[ИЗМЕНЕНО] Добавлена проверка первого запуска и мастер настройки.
+[ИЗМЕНЕНО] Упрощена логика завершения — без потоков и TerminateProcess.
 """
 import sys
 import subprocess
 import os
 import atexit
 import tkinter as tk
+
+
+# ============================================================================
+# ФЛАГ ЗАВЕРШЕНИЯ
+# ============================================================================
+_exiting = False
+
+
+def _force_exit():
+    """Принудительное завершение процесса."""
+    global _exiting
+    if _exiting:
+        return
+    _exiting = True
+    
+    try:
+        from database.connection import close_pool
+        close_pool()
+    except Exception:
+        pass
+    
+    try:
+        from database.cache import query_cache
+        query_cache.clear()
+    except Exception:
+        pass
+    
+    # Принудительное завершение
+    os._exit(0)
+
+
+# Регистрируем в atexit — вызывается при любом завершении
+atexit.register(_force_exit)
 
 
 # ============================================================================
@@ -43,7 +76,7 @@ def check_and_install_dependencies():
             print("✓ reportlab успешно установлена")
         except subprocess.CalledProcessError:
             print("✗ Ошибка при установке reportlab")
-            input("Нажмите Enter для выхода...")
+            _wait_user("Нажмите OK для выхода...")
             sys.exit(1)
     else:
         print("✓ Все необходимые библиотеки установлены")
@@ -55,56 +88,33 @@ check_and_install_dependencies()
 
 
 # ============================================================================
-# [НОВОЕ] ПРОВЕРКА ПЕРВОГО ЗАПУСКА И МАСТЕР НАСТРОЙКИ
+# БЕЗОПАСНЫЙ ВЫВОД СООБЩЕНИЙ
 # ============================================================================
-def _get_config_dir():
-    """Получить папку с конфигурацией"""
-    if getattr(sys, 'frozen', False):
-        return os.path.dirname(sys.executable)
-    else:
-        return os.path.dirname(os.path.abspath(__file__))
-
-
-def check_first_run_and_setup():
-    """
-    Проверить первый запуск и запустить мастер настройки.
-    Возвращает True, если настройка прошла успешно.
-    """
-    config_dir = _get_config_dir()
+def _wait_user(message="Нажмите OK для выхода..."):
+    """Безопасно показать сообщение пользователю."""
+    if hasattr(sys.stdin, 'isatty') and sys.stdin is not None:
+        try:
+            if sys.stdin.isatty():
+                input(message)
+                return
+        except (RuntimeError, OSError, AttributeError):
+            pass
     
-    # Импортируем модуль проверки первого запуска
     try:
-        from ui.windows.setup_wizard import is_first_run, run_setup_wizard
-    except ImportError:
-        # Если модуль не найден — пропускаем мастер
-        return True
-    
-    if not is_first_run(config_dir):
-        # Уже настроено — пропускаем
-        return True
-    
-    # Первый запуск — показываем мастер настройки
-    print("→ Обнаружен первый запуск программы")
-    print("→ Запуск мастера настройки...")
-    print()
-    
-    # Создаём временное окно для мастера
-    temp_root = tk.Tk()
-    temp_root.withdraw()  # Скрываем главное окно
-    temp_root.title("Евроблок — первоначальная настройка")
-    
-    # Запускаем мастер
-    result = run_setup_wizard(temp_root, config_dir)
-    
-    temp_root.destroy()
-    
-    if result is None:
-        # Пользователь отменил настройку
-        print("✗ Настройка отменена пользователем")
-        return False
-    
-    print(f"✓ Настройка завершена: {result}")
-    return True
+        import tkinter as tk
+        from tkinter import messagebox
+        
+        temp_root = tk.Tk()
+        temp_root.withdraw()
+        temp_root.attributes('-topmost', True)
+        
+        messagebox.showinfo("Евроблок", message)
+        
+        temp_root.destroy()
+    except Exception:
+        import time
+        print(message)
+        time.sleep(5)
 
 
 # ============================================================================
@@ -116,7 +126,62 @@ from database.connection import (
     init_database, close_pool, get_database_info,
     database_exists, validate_database, DB_PATH, CURRENT_DB_VERSION
 )
-from ui.main_window import EuroblockApp
+
+
+# ============================================================================
+# ПУТЬ К ПАПКЕ КОНФИГУРАЦИИ
+# ============================================================================
+def _get_config_dir():
+    """Получить папку с конфигурацией"""
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    else:
+        return os.path.dirname(os.path.abspath(__file__))
+
+
+# ============================================================================
+# ПРОВЕРКА ПЕРВОГО ЗАПУСКА И МАСТЕР НАСТРОЙКИ
+# ============================================================================
+def check_first_run_and_setup(root):
+    """Проверить первый запуск и запустить мастер настройки."""
+    config_dir = _get_config_dir()
+    
+    try:
+        from ui.windows.setup_wizard import is_first_run, run_setup_wizard
+    except ImportError as e:
+        print(f"⚠ Модуль мастера настройки не найден: {e}")
+        return True
+    
+    if not is_first_run(config_dir):
+        return True
+    
+    print("→ Обнаружен первый запуск программы")
+    print("→ Запуск мастера настройки...")
+    print()
+    
+    root.withdraw()
+    root.update()
+    
+    try:
+        result = run_setup_wizard(root, config_dir)
+    except Exception as e:
+        print(f"✗ Ошибка мастера настройки: {e}")
+        import traceback
+        traceback.print_exc()
+        result = None
+    finally:
+        try:
+            root.deiconify()
+            root.update()
+        except tk.TclError:
+            pass
+    
+    if result is None:
+        print("✗ Настройка отменена пользователем")
+        return False
+    
+    print(f"✓ Настройка завершена: {result}")
+    return True
 
 
 # ============================================================================
@@ -134,7 +199,7 @@ def cleanup_stale_locks_on_startup():
 
 
 def cleanup_notification_file_on_startup():
-    """Очистить файл уведомлений при старте, если он слишком большой."""
+    """Очистить файл уведомлений при старте."""
     try:
         notification_file = DB_PATH + '.notifications'
         if os.path.exists(notification_file):
@@ -147,122 +212,114 @@ def cleanup_notification_file_on_startup():
 
 
 # ============================================================================
-# ДИАГНОСТИКА
-# ============================================================================
-def run_diagnostics():
-    """Запустить диагностику производительности"""
-    import time
-    print("\n" + "=" * 70)
-    print("ДИАГНОСТИКА ПРОИЗВОДИТЕЛЬНОСТИ")
-    print("=" * 70)
-    
-    try:
-        info = get_database_info()
-        print(f"\nБаза данных: {info['path']}")
-        print(f"Размер: {info['size_mb']} МБ")
-        print(f"Версия БД: {info['version']}")
-        print(f"Таблиц: {info['tables_count']}")
-    except Exception as e:
-        print(f"Ошибка: {e}")
-    
-    print("\n" + "=" * 70)
-
-
-# ============================================================================
 # ОСНОВНАЯ ФУНКЦИЯ
 # ============================================================================
 def main():
     """Основная функция запуска программы"""
+    root = None
+    
     try:
-        if '--diagnostics' in sys.argv:
-            run_diagnostics()
-            return
-        
-        # [НОВОЕ] Проверка первого запуска и мастер настройки
-        if not check_first_run_and_setup():
-            print("✗ Настройка не завершена. Завершение работы.")
-            return
-        
         # Вывод информации о режиме работы
-        from client_config import MODE, print_mode_info, check_main_computer_available
+        from client_config import MODE, print_mode_info, NETWORK_DB_PATH, check_db_available
         print_mode_info()
-        print()
-        
-        # [НОВОЕ] Проверка доступности основного компьютера
-        if MODE == 'network':
-            check = check_main_computer_available()
-            if not check['available']:
-                # Основной компьютер недоступен
-                temp_root = tk.Tk()
-                temp_root.withdraw()
-                
-                result = messagebox.askretrycancel(
-                    "Основной компьютер недоступен",
-                    f"{check['error']}\n\n"
-                    f"Путь: {DB_PATH}\n\n"
-                    f"Повторить попытку подключения?"
-                )
-                
-                temp_root.destroy()
-                
-                if not result:
-                    # Пользователь хочет изменить настройки
-                    _reset_settings()
-                    return
-                else:
-                    # Повторная проверка
-                    check = check_main_computer_available()
-                    if not check['available']:
-                        messagebox.showerror(
-                            "Ошибка подключения",
-                            f"Не удалось подключиться к основному компьютеру.\n\n"
-                            f"{check['error']}"
-                        )
-                        return
-        
-        # Определяем путь к БД для отображения
-        print()
-        if database_exists():
-            print(f"✓ База данных найдена: {DB_PATH}")
-            try:
-                print(f"  Размер: {os.path.getsize(DB_PATH) / (1024*1024):.2f} МБ")
-            except:
-                pass
-        else:
-            print(f"→ База данных не найдена (первый запуск)")
-            print(f"  Будет создана новая БД: {DB_PATH}")
-        
         print()
         
         # Очистка устаревших данных
         cleanup_stale_locks_on_startup()
         cleanup_notification_file_on_startup()
         
+        # Инициализация БД
         init_database()
-        atexit.register(close_pool)
         
         # ====================================================================
-        # ЗАПУСК ГРАФИЧЕСКОГО ИНТЕРФЕЙСА
+        # Создаём ОДИН root на всё приложение
         # ====================================================================
         root = tk.Tk()
         
-        # Загрузка логотипа
+        # Проверяем первый запуск (мастер настроек)
+        if not check_first_run_and_setup(root):
+            try:
+                root.destroy()
+            except:
+                pass
+            print("Программа завершена.")
+            os._exit(0)
+        
+        # Гарантированно показываем root после мастера
+        try:
+            root.deiconify()
+            root.state('zoomed')
+            root.lift()
+            root.focus_force()
+            root.update()
+        except tk.TclError:
+            pass
+        
+        # Проверка доступности БД (для сетевого режима)
+        if MODE == 'network':
+            check = check_db_available()
+            if not check['available']:
+                result = messagebox.askretrycancel(
+                    "База данных недоступна",
+                    f"{check['error']}\n\n"
+                    f"Путь: {DB_PATH}\n\n"
+                    f"Повторить попытку подключения?",
+                    parent=root
+                )
+                if not result:
+                    _reset_settings(root)
+                    return
+                else:
+                    check = check_db_available()
+                    if not check['available']:
+                        messagebox.showerror(
+                            "Ошибка подключения",
+                            f"Не удалось подключиться к базе данных.\n\n{check['error']}",
+                            parent=root
+                        )
+                        root.destroy()
+                        os._exit(1)
+        
+        # Загрузка логотипа и установка иконки
         from utils.resources import load_logo, set_window_icon
         logo_image = load_logo()
         if logo_image:
             set_window_icon(root, logo_image)
+            print(f"✓ Логотип загружен и установлен как иконка окна")
         
         # Заголовок окна с информацией о режиме
         if MODE == 'network':
-            db_name = os.path.basename(DB_PATH)
-            role = "ОСНОВНОЙ" if check.get('is_main', False) else "КЛИЕНТ"
-            root.title(f"ООО Евроблок [{role}]")
+            db_name = os.path.basename(NETWORK_DB_PATH) if NETWORK_DB_PATH else 'сеть'
+            root.title(f"ООО Евроблок [СЕТЬ: {db_name}]")
         else:
             root.title("ООО Евроблок - производство и финансы")
         
+        # ====================================================================
         # Запуск приложения
+        # ====================================================================
+        from ui.main_window import EuroblockApp
         app = EuroblockApp(root, logo_image=logo_image)
-        root.mainloop()
+        
+        # Запускаем главный цикл
+        try:
+            root.mainloop()
+        except KeyboardInterrupt:
+            pass
+        except Exception as e:
+            print(f"⚠ Ошибка в mainloop: {e}")
+        
+        print("→ Завершение работы программы...")
+        
+    except PermissionError as e:
+        print()
+        print("=" * 70)
+        print("ОШИБКА БЛОКИРОВКИ ФАЙЛА")
+        print("=" * 70)
+        print()
+        print(f"Файл базы данных заблокирован:\n{e}")
+        print()
+        _wait_user("Нажмите OK для выхода...")
+        os._exit(1)
         
     except Exception as e:
         print()
@@ -272,17 +329,32 @@ def main():
         print()
         print(f"Произошла ошибка при запуске программы:\n{e}")
         print()
-        input("Нажмите Enter для выхода...")
-        sys.exit(1)
+        import traceback
+        traceback.print_exc()
+        print()
+        
+        _wait_user("Нажмите OK для выхода...")
+        os._exit(1)
+    
+    # ========================================================================
+    # ГАРАНТИРОВАННОЕ ЗАВЕРШЕНИЕ ПОСЛЕ MAINLOOP
+    # ========================================================================
+    # Закрываем пул соединений
+    try:
+        close_pool()
+    except Exception:
+        pass
+    
+    # Принудительное завершение процесса
+    os._exit(0)
 
 
-def _reset_settings():
+def _reset_settings(root):
     """Сбросить настройки и запустить мастер заново"""
     config_dir = _get_config_dir()
     config_file = os.path.join(config_dir, 'network_config.ini')
     marker_file = os.path.join(config_dir, '.first_run_done')
     
-    # Удаляем файлы конфигурации
     try:
         if os.path.exists(config_file):
             os.remove(config_file)
@@ -292,8 +364,18 @@ def _reset_settings():
     except Exception as e:
         print(f"✗ Ошибка сброса настроек: {e}")
     
-    # Перезапускаем программу
     print("→ Перезапуск программы...")
+    
+    try:
+        close_pool()
+    except Exception:
+        pass
+    
+    try:
+        root.destroy()
+    except:
+        pass
+    
     python = sys.executable
     script = sys.argv[0]
     os.execl(python, python, script)

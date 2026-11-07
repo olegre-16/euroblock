@@ -356,3 +356,13 @@ class CementReceiptWindow(BaseToplevelWindow):
         else:
             self.show_error("Ошибка", message)
             self._restore_window_state()
+            
+    def _on_auto_refresh(self):
+        """
+        Автообновление данных при изменении БД другим компьютером.
+        Вызывается таймером из BaseToplevelWindow каждые 3 секунды.
+        """
+        try:
+            self.load_receipts()
+        except Exception as e:
+            print(f"⚠ Ошибка автообновления в CementReceiptWindow: {e}")

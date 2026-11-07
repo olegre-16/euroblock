@@ -1,13 +1,25 @@
 """
 Модуль подключения и инициализации базы данных.
-Поддержка многопользовательского режима (локальный/сетевой/серверный).
-При запуске проверяет наличие существующей БД и использует её,
-либо создаёт новую при первом запуске.
-[ИЗМЕНЕНО] 
-- Добавлена поддержка сетевого режима через file path
-- Добавлена проверка доступности сетевого пути
-- Увеличены таймауты для сетевого режима
-- Добавлена миграция 3: таблица reserve_sales_history
+Поддержка многопользовательского режима через сетевой диск.
+Все компьютеры равноправны — любой подключается к общей БД.
+
+[ИЗМЕНЕНО]
+- Поддержка сетевого пути к БД через client_config
+- Для сетевого режима используется journal_mode=DELETE (вместо WAL)
+  — это критически важно для стабильной работы по сети!
+- Для локального режима используется journal_mode=WAL (быстрее)
+- cache_size=0 в сетевом режиме — отключение кэша SQLite
+- get_connection() всегда проверяет изменения БД в сетевом режиме
+- DBSyncMonitor.check_for_changes(force=True) — принудительная проверка
+- Увеличенные таймауты и число повторных попыток для сети
+- Обработка "disk I/O error" с повторными попытками
+- Синхронизация кэша между клиентами через DBSyncMonitor
+- Очистка файлов блокировки при запуске (release_db_locks)
+- Retry-логика для сетевого режима (safe_connect)
+- Безопасный вывод ошибок (_show_error_and_exit)
+- Обработка PermissionError при создании/удалении БД
+- Упрощённый close_pool() для гарантированного завершения
+- Миграция 3: таблица reserve_sales_history
 - Версия БД обновлена до 1.0.1
 """
 import sqlite3
@@ -15,6 +27,7 @@ import os
 import sys
 import threading
 import shutil
+import time
 from datetime import datetime
 
 
@@ -25,26 +38,16 @@ def get_db_path():
     """
     Получить путь к базе данных.
     Приоритет:
-    1. Режим 'network' → путь из network_config.ini или переменных окружения
-    2. Режим 'server' → не используется (работа через HTTP)
-    3. Запуск из EXE → папка с EXE-файлом
-    4. Запуск из скрипта → корень проекта
+    1. Из client_config (с учётом network_config.ini)
+    2. Локальный путь по умолчанию
     """
-    # Импортируем здесь, чтобы избежать циклического импорта
     try:
-        from client_config import MODE, NETWORK_DB_PATH
-        
-        # Режим "network" — путь к БД в сетевой папке
-        if MODE == 'network' and NETWORK_DB_PATH:
-            return NETWORK_DB_PATH
-        
-        # Режим "server" — путь не нужен (работа через HTTP)
-        if MODE == 'server':
-            pass  # fallback на локальный путь
+        from client_config import DB_PATH as CONFIG_DB_PATH
+        return CONFIG_DB_PATH
     except ImportError:
         pass
     
-    # Локальный режим — стандартный путь
+    # Fallback — стандартный путь
     if getattr(sys, 'frozen', False):
         base_path = os.path.dirname(sys.executable)
     else:
@@ -80,19 +83,16 @@ def check_network_path(db_path: str) -> dict:
     try:
         db_dir = os.path.dirname(db_path)
         
-        # Проверяем доступность папки
         if not os.path.exists(db_dir):
             result['error'] = f"Сетевая папка недоступна: {db_dir}"
             return result
         
         result['accessible'] = True
         
-        # Проверяем существование БД
         if os.path.exists(db_path):
             result['db_exists'] = True
             result['db_size'] = os.path.getsize(db_path)
         
-        # Проверяем возможность записи
         test_file = os.path.join(db_dir, '.write_test_temp')
         try:
             with open(test_file, 'w', encoding='utf-8') as f:
@@ -106,6 +106,202 @@ def check_network_path(db_path: str) -> dict:
         result['error'] = f"Ошибка проверки: {e}"
     
     return result
+
+
+# ============================================================================
+# ОЧИСТКА БЛОКИРОВОК БД
+# ============================================================================
+def release_db_locks():
+    """
+    Очистить файлы блокировки SQLite (.db-wal, .db-shm, .db-journal).
+    Вызывается при запуске в локальном режиме, если предыдущий экземпляр
+    программы аварийно завершился и оставил заблокированные файлы.
+    """
+    lock_files = [
+        DB_PATH + '-wal',
+        DB_PATH + '-shm',
+        DB_PATH + '-journal'
+    ]
+    
+    for lock_file in lock_files:
+        if os.path.exists(lock_file):
+            try:
+                os.remove(lock_file)
+                print(f"  ✓ Удалён файл блокировки: {os.path.basename(lock_file)}")
+            except PermissionError:
+                print(f"  ⚠ Не удалось удалить {os.path.basename(lock_file)} — файл занят")
+            except Exception as e:
+                print(f"  ⚠ Ошибка удаления {os.path.basename(lock_file)}: {e}")
+
+
+# ============================================================================
+# БЕЗОПАСНОЕ ПОДКЛЮЧЕНИЕ С ПОВТОРНЫМИ ПОПЫТКАМИ
+# ============================================================================
+def safe_connect(db_path, timeout=30, max_retries=10):
+    """
+    Безопасное подключение к БД с повторными попытками.
+    - Увеличено число попыток до 10
+    - Добавлена обработка "disk I/O error"
+    - Для сетевого режима используется journal_mode=DELETE
+    - Нарастающий интервал ожидания между попытками
+    """
+    # Определяем режим работы
+    try:
+        from client_config import MODE
+        is_network = (MODE == 'network')
+    except ImportError:
+        is_network = False
+    
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            conn = sqlite3.connect(
+                db_path, 
+                timeout=timeout, 
+                check_same_thread=False,
+                isolation_level=None  # Авто-коммит для стабильности
+            )
+            
+            if is_network:
+                # Для сетевого режима — СТАБИЛЬНАЯ конфигурация
+                # journal_mode=DELETE вместо WAL — критически важно для сети!
+                conn.execute('PRAGMA journal_mode=DELETE')
+                conn.execute(f'PRAGMA busy_timeout={int(timeout * 1000)}')
+                conn.execute('PRAGMA cache_size=0')            # Отключение кэша
+                conn.execute('PRAGMA synchronous=FULL')        # Максимальная надёжность
+                conn.execute('PRAGMA temp_store=MEMORY')
+                conn.execute('PRAGMA foreign_keys=ON')
+                conn.execute('PRAGMA locking_mode=NORMAL')
+                conn.execute('PRAGMA cache_spill=OFF')
+            else:
+                # Для локального режима — быстрая конфигурация с WAL
+                conn.execute('PRAGMA journal_mode=WAL')
+                conn.execute(f'PRAGMA busy_timeout={int(timeout * 1000)}')
+                conn.execute('PRAGMA cache_size=10000')
+                conn.execute('PRAGMA synchronous=NORMAL')
+                conn.execute('PRAGMA temp_store=MEMORY')
+                conn.execute('PRAGMA foreign_keys=ON')
+            
+            # Проверяем работоспособность соединения
+            conn.execute('SELECT 1')
+            return conn
+            
+        except (sqlite3.OperationalError, sqlite3.DatabaseError) as e:
+            last_error = e
+            error_msg = str(e).lower()
+            # Повторяем попытки при "disk I/O error", "locked" или "unable to open"
+            if 'disk i/o' in error_msg or 'locked' in error_msg or 'unable to open' in error_msg:
+                wait_time = min(2 + attempt, 10)  # Нарастающий интервал ожидания
+                print(f"  ⚠ Попытка {attempt + 1}/{max_retries}: {e}, ждём {wait_time}с...")
+                time.sleep(wait_time)
+            else:
+                raise
+        except PermissionError as e:
+            last_error = e
+            print(f"  ⚠ Попытка {attempt + 1}/{max_retries}: Нет доступа к файлу, ждём...")
+            time.sleep(2)
+    
+    raise sqlite3.OperationalError(
+        f"Не удалось подключиться к БД после {max_retries} попыток: {last_error}"
+    )
+
+
+# ============================================================================
+# СИНХРОНИЗАЦИЯ КЭША МЕЖДУ КЛИЕНТАМИ
+# ============================================================================
+class DBSyncMonitor:
+    """
+    Монитор изменений БД для синхронизации кэша между клиентами.
+    Проверяет timestamp файла БД и инвалидирует кэш при изменениях.
+    Используется в многопользовательском режиме, чтобы все компьютеры
+    видели изменения друг друга.
+    """
+    def __init__(self, db_path, check_interval=2):
+        self.db_path = db_path
+        self.check_interval = check_interval
+        self.last_mtime = None
+        self.last_check_time = 0
+        self._on_change_callbacks = []
+        
+        # Инициализируем начальное значение
+        self._update_mtime()
+    
+    def _update_mtime(self):
+        """Обновить известное время модификации файла БД"""
+        try:
+            if os.path.exists(self.db_path):
+                self.last_mtime = os.path.getmtime(self.db_path)
+            else:
+                self.last_mtime = None
+        except Exception:
+            self.last_mtime = None
+        self.last_check_time = time.time()
+    
+    def check_for_changes(self, force=False) -> bool:
+        """
+        Проверить, изменилась ли БД с последней проверки.
+        
+        Args:
+            force: если True — игнорировать check_interval и проверять всегда
+        
+        Returns:
+            True, если изменения обнаружены.
+        """
+        current_time = time.time()
+        
+        # Если force=False — проверяем не чаще, чем раз в check_interval секунд
+        if not force and (current_time - self.last_check_time < self.check_interval):
+            return False
+        
+        self.last_check_time = current_time
+        
+        try:
+            if not os.path.exists(self.db_path):
+                if self.last_mtime is not None:
+                    self.last_mtime = None
+                    return True
+                return False
+            
+            current_mtime = os.path.getmtime(self.db_path)
+            
+            if self.last_mtime is None or current_mtime != self.last_mtime:
+                self.last_mtime = current_mtime
+                # Вызываем коллбэки
+                for callback in self._on_change_callbacks:
+                    try:
+                        callback()
+                    except Exception as e:
+                        print(f"⚠ Ошибка в коллбэке синхронизации: {e}")
+                return True
+            
+            return False
+        except Exception:
+            return False
+    
+    def on_change(self, callback):
+        """Зарегистрировать коллбэк на изменение БД"""
+        self._on_change_callbacks.append(callback)
+    
+    def force_check(self):
+        """Принудительно обновить timestamp (после записи)"""
+        self._update_mtime()
+
+
+# Глобальный монитор синхронизации
+_db_sync_monitor = None
+
+
+def get_db_sync_monitor():
+    """Получить глобальный монитор синхронизации"""
+    global _db_sync_monitor
+    if _db_sync_monitor is None:
+        try:
+            from client_config import CHECK_INTERVAL
+            check_interval = CHECK_INTERVAL
+        except ImportError:
+            check_interval = 2
+        _db_sync_monitor = DBSyncMonitor(DB_PATH, check_interval)
+    return _db_sync_monitor
 
 
 # ============================================================================
@@ -126,38 +322,77 @@ class ConnectionPool:
             self.pool.append(conn)
     
     def _create_connection(self):
-        """Создать соединение с БД с учётом режима работы"""
+        """
+        Создать соединение с БД с учётом режима работы.
+        - Для сетевого режима: journal_mode=DELETE, synchronous=FULL, timeout=120, cache_size=0
+        - Для локального режима: journal_mode=WAL, synchronous=NORMAL
+        - Повторные попытки при "disk I/O error"
+        """
         try:
             from client_config import MODE, BUSY_TIMEOUT
             
-            # Для сетевого режима увеличиваем таймауты
             if MODE == 'network':
-                timeout = max(BUSY_TIMEOUT, 60)  # Минимум 60 сек для сети
+                timeout = max(BUSY_TIMEOUT, 120)  # Минимум 120 сек для сети
+                is_network = True
             else:
                 timeout = 30.0
+                is_network = False
         except ImportError:
             timeout = 30.0
+            is_network = False
         
-        conn = sqlite3.connect(self.db_path, timeout=timeout, check_same_thread=False)
+        # Повторные попытки подключения при "disk I/O error"
+        last_error = None
+        for attempt in range(5):
+            try:
+                conn = sqlite3.connect(
+                    self.db_path, 
+                    timeout=timeout, 
+                    check_same_thread=False,
+                    isolation_level=None  # Авто-коммит для стабильности
+                )
+                
+                if is_network:
+                    # Для сетевого режима — СТАБИЛЬНАЯ конфигурация
+                    conn.execute('PRAGMA journal_mode=DELETE')
+                    conn.execute(f'PRAGMA busy_timeout={int(timeout * 1000)}')
+                    conn.execute('PRAGMA cache_size=0')            # Отключение кэша
+                    conn.execute('PRAGMA synchronous=FULL')        # Максимальная надёжность
+                    conn.execute('PRAGMA temp_store=MEMORY')
+                    conn.execute('PRAGMA foreign_keys=ON')
+                    conn.execute('PRAGMA locking_mode=NORMAL')
+                    conn.execute('PRAGMA cache_spill=OFF')
+                else:
+                    # Для локального режима — быстрая конфигурация с WAL
+                    conn.execute('PRAGMA journal_mode=WAL')
+                    conn.execute(f'PRAGMA busy_timeout={int(timeout * 1000)}')
+                    conn.execute('PRAGMA cache_size=10000')
+                    conn.execute('PRAGMA synchronous=NORMAL')
+                    conn.execute('PRAGMA temp_store=MEMORY')
+                    conn.execute('PRAGMA foreign_keys=ON')
+                
+                return conn
+                
+            except sqlite3.OperationalError as e:
+                last_error = e
+                error_msg = str(e).lower()
+                if 'disk i/o' in error_msg or 'locked' in error_msg or 'unable to open' in error_msg:
+                    print(f"  ⚠ Попытка {attempt + 1}/5: {e}, ждём...")
+                    time.sleep(2)
+                else:
+                    raise
+            except sqlite3.DatabaseError as e:
+                last_error = e
+                error_msg = str(e).lower()
+                if 'disk i/o' in error_msg:
+                    print(f"  ⚠ Попытка {attempt + 1}/5: {e}, ждём...")
+                    time.sleep(2)
+                else:
+                    raise
         
-        # Оптимизации для многопользовательской работы
-        conn.execute('PRAGMA journal_mode=WAL')
-        conn.execute(f'PRAGMA busy_timeout={int(timeout * 1000)}')
-        conn.execute('PRAGMA cache_size=10000')
-        conn.execute('PRAGMA synchronous=NORMAL')
-        conn.execute('PRAGMA temp_store=MEMORY')
-        conn.execute('PRAGMA foreign_keys=ON')
-        
-        # Дополнительные настройки для сетевого режима
-        try:
-            from client_config import MODE
-            if MODE == 'network':
-                conn.execute('PRAGMA wal_autocheckpoint=100')
-                conn.execute('PRAGMA locking_mode=NORMAL')
-        except ImportError:
-            pass
-        
-        return conn
+        raise sqlite3.OperationalError(
+            f"Не удалось подключиться к БД после 5 попыток: {last_error}"
+        )
     
     def get_connection(self):
         with self.lock:
@@ -177,11 +412,12 @@ class ConnectionPool:
                     pass
     
     def close_all(self):
+        """Закрыть все соединения в пуле"""
         with self.lock:
             for conn in self.pool:
                 try:
                     conn.close()
-                except:
+                except Exception:
                     pass
             self.pool.clear()
 
@@ -200,38 +436,63 @@ def get_pool():
 
 
 def get_connection():
+    """
+    Получить соединение из пула.
+    [ИЗМЕНЕНО] В сетевом режиме всегда проверяет изменения БД
+    и очищает кэш запросов для синхронизации с другими клиентами.
+    """
+    try:
+        from client_config import MODE
+        is_network = (MODE == 'network')
+    except ImportError:
+        is_network = False
+    
+    monitor = get_db_sync_monitor()
+    
+    if is_network:
+        # В сетевом режиме проверяем изменения ПРИ КАЖДОМ запросе
+        if monitor.check_for_changes(force=True):
+            try:
+                from database.cache import query_cache
+                query_cache.clear()
+            except ImportError:
+                pass
+    else:
+        # В локальном режиме — обычная проверка с интервалом
+        if monitor.check_for_changes():
+            try:
+                from database.cache import query_cache
+                query_cache.clear()
+            except ImportError:
+                pass
+    
     return get_pool().get_connection()
 
 
 def return_connection(conn):
-    get_pool().return_connection(conn)
+    """Вернуть соединение в пул и обновить timestamp"""
+    pool = get_pool()
+    pool.return_connection(conn)
+    
+    # После возврата соединения обновляем timestamp
+    monitor = get_db_sync_monitor()
+    monitor.force_check()
 
 
 # ============================================================================
 # ПРОВЕРКА И АНАЛИЗ БАЗЫ ДАННЫХ
 # ============================================================================
 def database_exists() -> bool:
-    """
-    Проверить, существует ли файл базы данных.
-    Returns:
-        True, если файл euroblock.db существует в папке программы
-    """
+    """Проверить, существует ли файл базы данных."""
     return os.path.exists(DB_PATH) and os.path.getsize(DB_PATH) > 0
 
 
 def validate_database() -> dict:
     """
     Проверить целостность и валидность базы данных.
-    Returns:
-         Словарь с результатами проверки:
-         {
-             'exists': bool,           - существует ли файл
-             'valid': bool,            - валидна ли БД
-             'integrity': str,         - результат проверки целостности
-             'version': str,           - версия БД
-             'tables_count': int,      - количество таблиц
-             'error': str or None      - сообщение об ошибке
-         }
+    [ВАЖНО] Используется только для локального режима.
+    Для сетевого режима эта функция не вызывается, т.к.
+    PRAGMA integrity_check конфликтует с другими клиентами.
     """
     result = {
         'exists': False,
@@ -242,19 +503,16 @@ def validate_database() -> dict:
         'error': None
     }
     
-    # Проверяем существование файла
     if not database_exists():
         result['error'] = 'База данных не найдена'
         return result
     
     result['exists'] = True
     
-    # Пытаемся подключиться и проверить целостность
     try:
         conn = sqlite3.connect(DB_PATH, timeout=10.0)
         cursor = conn.cursor()
         
-        # Проверка целостности
         cursor.execute("PRAGMA integrity_check")
         integrity_result = cursor.fetchone()
         result['integrity'] = integrity_result[0] if integrity_result else 'unknown'
@@ -264,17 +522,14 @@ def validate_database() -> dict:
             conn.close()
             return result
         
-        # Подсчёт таблиц
         cursor.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table'")
         result['tables_count'] = cursor.fetchone()[0]
         
-        # Получение версии БД
         try:
             cursor.execute("SELECT value FROM app_settings WHERE key='db_version'")
             row = cursor.fetchone()
             result['version'] = row[0] if row else '0.0.0'
         except sqlite3.OperationalError:
-            # Таблица app_settings ещё не создана
             result['version'] = '0.0.0'
         
         result['valid'] = True
@@ -288,13 +543,7 @@ def validate_database() -> dict:
 
 
 def backup_database(backup_dir: str = None) -> str:
-    """
-    Создать резервную копию базы данных.
-    Args:
-         backup_dir: папка для бэкапа (по умолчанию — папка 'backups' рядом с БД)
-    Returns:
-         Путь к созданному файлу бэкапа или None при ошибке
-    """
+    """Создать резервную копию базы данных."""
     if not database_exists():
         return None
     
@@ -314,13 +563,7 @@ def backup_database(backup_dir: str = None) -> str:
 
 
 def compare_version(v1: str, v2: str) -> int:
-    """
-    Сравнить две версии в формате "x.y.z".
-    Returns:
-         -1 если v1 < v2
-          0 если v1 == v2
-          1 если v1 > v2
-    """
+    """Сравнить две версии в формате 'x.y.z'."""
     def parse_version(v):
         try:
             parts = v.split('.')
@@ -339,17 +582,45 @@ def compare_version(v1: str, v2: str) -> int:
 
 
 # ============================================================================
+# БЕЗОПАСНЫЙ ВЫВОД ОШИБОК
+# ============================================================================
+def _show_error_and_exit(title, message):
+    """
+    Показать ошибку пользователю и завершить программу.
+    Работает как в консольном, так и в GUI режиме.
+    Не использует input() — безопасно для EXE.
+    """
+    try:
+        import tkinter as tk
+        from tkinter import messagebox
+        
+        temp_root = tk.Tk()
+        temp_root.withdraw()
+        temp_root.attributes('-topmost', True)
+        
+        messagebox.showerror(title, message)
+        
+        temp_root.destroy()
+    except Exception:
+        print(f"\n{'=' * 70}")
+        print(f"ОШИБКА: {title}")
+        print(f"{'=' * 70}")
+        print(message)
+        print(f"{'=' * 70}\n")
+    
+    sys.exit(1)
+
+
+# ============================================================================
 # ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ
 # ============================================================================
 def init_database():
     """
     Инициализация базы данных с проверкой существования.
-    Логика работы:
-     1. Если БД существует и валидна — используется существующая
-     2. Если БД не существует — создаётся новая
-     3. Если БД повреждена — создаётся бэкап и новая БД
-     4. Если версия БД старая — применяются миграции
-    [ИЗМЕНЕНО] Добавлена поддержка сетевого режима.
+    - В сетевом режиме БД НИКОГДА не удаляется
+    - В сетевом режиме не делается проверка целостности
+    - Добавлена обработка блокировки файла
+    - Используется safe_connect() для сетевого режима
     """
     print("=" * 70)
     print("Инициализация базы данных")
@@ -357,15 +628,30 @@ def init_database():
     print(f"Путь к БД: {DB_PATH}")
     print()
     
-    # Проверка сетевого пути
+    # Определяем режим работы
     try:
         from client_config import MODE
-        if MODE == 'network':
-            print("→ Режим: Сетевая база данных")
-            check_result = check_network_path(DB_PATH)
+        is_network = (MODE == 'network')
+    except ImportError:
+        is_network = False
+    
+    # Очистка файлов блокировки (только для локального режима)
+    if not is_network:
+        print("→ Проверка файлов блокировки...")
+        release_db_locks()
+        print()
+    
+    # Проверка доступности БД
+    try:
+        from client_config import check_db_available
+        check_result = check_db_available()
+        
+        if not check_result['available']:
+            print(f"✗ Ошибка: {check_result['error']}")
+            print()
             
-            if not check_result['accessible']:
-                print(f"✗ Ошибка: {check_result['error']}")
+            if is_network:
+                print("РЕЖИМ: Многопользовательский (сетевая БД)")
                 print()
                 print("Возможные причины:")
                 print("  1. Сетевая папка недоступна")
@@ -377,121 +663,255 @@ def init_database():
                 print("  1. Проверьте путь в network_config.ini")
                 print("  2. Убедитесь, что сетевая папка доступна")
                 print("  3. Проверьте права доступа (чтение/запись)")
-                print("  4. Попробуйте открыть папку через Проводник")
+            else:
+                print("РЕЖИМ: Локальный")
                 print()
-                input("Нажмите Enter для выхода...")
-                sys.exit(1)
+                print("Возможные причины:")
+                print("  1. Папка программы недоступна")
+                print("  2. Нет прав на запись")
             
-            print(f"✓ Сетевая папка доступна")
+            print()
+            _show_error_and_exit(
+                "Ошибка подключения к базе данных",
+                check_result['error']
+            )
+        
+        if is_network:
+            print(f"✓ Многопользовательский режим: база данных доступна")
             print(f"  - Запись разрешена: {'Да' if check_result['writable'] else 'НЕТ!'}")
             
             if not check_result['writable']:
                 print()
-                print("✗ ОШИБКА: Нет прав на запись в сетевую папку!")
-                print("  Обратитесь к администратору для предоставления прав.")
+                print("✗ ОШИБКА: Нет прав на запись!")
+                print("  Обратитесь к администратору сетевого ресурса.")
                 print()
-                input("Нажмите Enter для выхода...")
-                sys.exit(1)
+                _show_error_and_exit(
+                    "Нет прав на запись",
+                    "Обратитесь к администратору сетевого ресурса."
+                )
             
             if check_result['db_exists']:
-                print(f"  - База данных найдена ({check_result['db_size'] / (1024*1024):.2f} МБ)")
+                print(f"  - База данных найдена ({check_result.get('db_size', 0) / (1024*1024):.2f} МБ)")
             else:
                 print(f"  - База данных будет создана (первый запуск)")
-            print()
+        else:
+            print(f"✓ Локальный режим: база данных доступна")
+        
+        print()
     except ImportError:
         pass
     
     # ========================================================================
-    # ШАГ 1: Проверяем существование БД
+    # РАЗНАЯ ЛОГИКА ДЛЯ СЕТЕВОГО И ЛОКАЛЬНОГО РЕЖИМОВ
     # ========================================================================
-    if database_exists():
-        print("✓ Файл базы данных найден")
+    
+    if is_network:
+        # ====================================================================
+        # СЕТЕВОЙ РЕЖИМ: НЕ трогаем существующую БД!
+        # ====================================================================
+        print("→ Сетевой режим: подключаемся к общей базе данных...")
         
-        # ====================================================================
-        # ШАГ 2: Проверяем целостность
-        # ====================================================================
-        validation = validate_database()
-        if validation['valid']:
-            print(f"✓ База данных валидна")
-            print(f"  - Версия БД: {validation['version']}")
-            print(f"  - Таблиц: {validation['tables_count']}")
-            print(f"  - Целостность: {validation['integrity']}")
-            print()
+        if database_exists():
+            # БД существует — просто подключаемся
+            print(f"✓ База данных найдена: {DB_PATH}")
+            print("→ Подключение к существующей базе данных...")
             
-            # ==================================================================
-            # ШАГ 3: Проверяем версию и применяем миграции
-            # ==================================================================
-            db_version = validation['version']
-            if compare_version(db_version, CURRENT_DB_VERSION) < 0:
-                print(f"→ Версия БД ({db_version}) старше текущей ({CURRENT_DB_VERSION})")
-                print("→ Применяются миграции...")
-                _apply_migrations(db_version)
-            else:
-                print(f"✓ Версия БД актуальна")
-            
-            print()
-            print("✓ Используется существующая база данных")
-            print("  Все ваши данные сохранены!")
-            print("=" * 70)
-            print()
+            try:
+                conn = safe_connect(DB_PATH, timeout=120, max_retries=10)
+                
+                # Проверяем, что БД валидна, но БЕЗ integrity_check
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' LIMIT 1")
+                    cursor.fetchone()
+                    print("✓ Структура БД проверена")
+                except Exception as e:
+                    print(f"⚠ Предупреждение при проверке: {e}")
+                
+                conn.close()
+                print("✓ Подключение успешно установлено")
+            except Exception as e:
+                print(f"✗ Ошибка подключения: {e}")
+                print()
+                print("Возможные причины:")
+                print("  1. База данных заблокирована другим компьютером")
+                print("  2. Сетевое соединение нестабильно")
+                print("  3. Недостаточно прав доступа")
+                print("  4. Файл повреждён")
+                print()
+                print("Решение:")
+                print("  1. Подождите несколько секунд и попробуйте снова")
+                print("  2. Убедитесь, что основной компьютер работает")
+                print("  3. Проверьте сетевое соединение")
+                print("  4. Если проблема повторяется — перезагрузите компьютеры")
+                print()
+                _show_error_and_exit(
+                    "Ошибка подключения к базе данных",
+                    f"Не удалось подключиться к БД:\n{e}\n\n"
+                    f"Подождите несколько секунд и попробуйте снова."
+                )
             
             # Инициализируем пул соединений
             get_pool()
+            
+            print()
+            print("=" * 70)
+            print("✓ Подключено к общей базе данных")
+            print("  Работаем с существующими данными.")
+            print("=" * 70)
+            print()
             return
         else:
-            # ==================================================================
-            # ШАГ 2.1: БД повреждена
-            # ==================================================================
-            print(f"✗ База данных повреждена: {validation['error']}")
+            # БД не существует — создаём её (первый запуск в сети)
+            print("→ База данных не найдена (первый запуск в сети)")
+            print("→ Создаётся новая база данных...")
             print()
-            print("→ Создаётся резервная копия повреждённой БД...")
-            backup_path = backup_database()
-            if backup_path:
-                print(f"✓ Резервная копия создана: {backup_path}")
+            
+            try:
+                _create_new_database()
+            except PermissionError as e:
+                print(f"✗ Ошибка создания БД: {e}")
                 print()
-                print("→ Создаётся новая база данных...")
-                # Удаляем повреждённую БД
-                try:
-                    os.remove(DB_PATH)
-                    # Удаляем также файлы WAL и SHM
-                    for ext in ['-wal', '-shm', '-journal']:
-                        wal_file = DB_PATH + ext
-                        if os.path.exists(wal_file):
-                            os.remove(wal_file)
-                except Exception as e:
-                    print(f"✗ Не удалось удалить повреждённую БД: {e}")
-                    print("  Попробуйте закрыть все экземпляры программы и повторить")
-                    raise
-            else:
-                print("✗ Не удалось создать резервную копию")
-                print("→ Продолжаем с созданием новой БД...")
+                print("Возможно, нет прав на запись в сетевую папку.")
+                print()
+                _show_error_and_exit(
+                    "Ошибка создания базы данных",
+                    f"Не удалось создать БД:\n{e}\n\n"
+                    f"Проверьте права доступа к сетевой папке."
+                )
+            except sqlite3.OperationalError as e:
+                print(f"✗ Ошибка SQLite: {e}")
+                _show_error_and_exit(
+                    "Ошибка базы данных",
+                    f"SQLite ошибка:\n{e}"
+                )
+            
+            print()
+            print("=" * 70)
+            print("✓ База данных успешно создана в сетевой папке")
+            print("=" * 70)
+            print()
+            return
+    
     else:
-        # ======================================================================
-        # ШАГ 1.1: БД не существует — первый запуск
-        # ======================================================================
-        print("→ База данных не найдена (первый запуск)")
-        print("→ Создаётся новая база данных...")
+        # ====================================================================
+        # ЛОКАЛЬНЫЙ РЕЖИМ: старая логика с проверкой целостности
+        # ====================================================================
+        if database_exists():
+            print("✓ Файл базы данных найден")
+            
+            validation = validate_database()
+            if validation['valid']:
+                print(f"✓ База данных валидна")
+                print(f"  - Версия БД: {validation['version']}")
+                print(f"  - Таблиц: {validation['tables_count']}")
+                print(f"  - Целостность: {validation['integrity']}")
+                print()
+                
+                db_version = validation['version']
+                if compare_version(db_version, CURRENT_DB_VERSION) < 0:
+                    print(f"→ Версия БД ({db_version}) старше текущей ({CURRENT_DB_VERSION})")
+                    print("→ Применяются миграции...")
+                    _apply_migrations(db_version)
+                else:
+                    print(f"✓ Версия БД актуальна")
+                
+                print()
+                print("✓ Используется существующая база данных")
+                print("  Все ваши данные сохранены!")
+                print("=" * 70)
+                print()
+                
+                get_pool()
+                return
+            else:
+                # БД повреждена — в локальном режиме можно удалить и создать заново
+                print(f"✗ База данных повреждена: {validation['error']}")
+                print()
+                print("→ Создаётся резервная копия повреждённой БД...")
+                
+                close_pool()
+                time.sleep(0.5)
+                
+                backup_path = backup_database()
+                if backup_path:
+                    print(f"✓ Резервная копия создана: {backup_path}")
+                    print()
+                    print("→ Создаётся новая база данных...")
+                    
+                    try:
+                        if os.path.exists(DB_PATH):
+                            os.remove(DB_PATH)
+                        for ext in ['-wal', '-shm', '-journal']:
+                            wal_file = DB_PATH + ext
+                            if os.path.exists(wal_file):
+                                try:
+                                    os.remove(wal_file)
+                                except PermissionError:
+                                    print(f"  ⚠ Файл {ext} занят")
+                    except PermissionError as e:
+                        print(f"✗ Не удалось удалить повреждённую БД: {e}")
+                        _show_error_and_exit(
+                            "Файл базы данных заблокирован",
+                            f"Не удалось удалить повреждённую БД:\n{DB_PATH}\n\n"
+                            f"Закройте все экземпляры программы и попробуйте снова."
+                        )
+                    except Exception as e:
+                        print(f"✗ Не удалось удалить повреждённую БД: {e}")
+                        _show_error_and_exit(
+                            "Ошибка удаления БД",
+                            f"Не удалось удалить повреждённую БД:\n{e}"
+                        )
+                else:
+                    print("✗ Не удалось создать резервную копию")
+                    print("→ Продолжаем с созданием новой БД...")
+        else:
+            print("→ База данных не найдена (первый запуск)")
+            print("→ Создаётся новая база данных...")
+            print()
+        
+        try:
+            _create_new_database()
+        except PermissionError as e:
+            print(f"✗ Ошибка создания БД: {e}")
+            _show_error_and_exit(
+                "Ошибка создания базы данных",
+                f"Не удалось создать БД:\n{e}\n\n"
+                f"Закройте все экземпляры программы и попробуйте снова."
+            )
+        except sqlite3.OperationalError as e:
+            print(f"✗ Ошибка SQLite: {e}")
+            _show_error_and_exit(
+                "Ошибка базы данных",
+                f"SQLite ошибка:\n{e}"
+            )
+        
         print()
-    
-    # =========================================================================
-    # ШАГ 4: Создание новой БД
-    # =========================================================================
-    _create_new_database()
-    
-    print()
-    print("=" * 70)
-    print("✓ База данных успешно создана и инициализирована")
-    print("=" * 70)
-    print()
+        print("=" * 70)
+        print("✓ База данных успешно создана и инициализирована")
+        print("=" * 70)
+        print()
 
 
 def _create_new_database():
     """Создать новую базу данных со всеми таблицами и индексами"""
-    conn = get_connection()
+    is_pooled = True
+    try:
+        from client_config import MODE
+        if MODE == 'network':
+            conn = safe_connect(DB_PATH, timeout=120, max_retries=10)
+            is_pooled = False
+        else:
+            conn = get_connection()
+            is_pooled = True
+    except ImportError:
+        conn = get_connection()
+        is_pooled = True
+    
     cursor = conn.cursor()
     try:
         # ====================================================================
-        # ТАБЛИЦА НАСТРОЕК ПРИЛОЖЕНИЯ (должна быть первой)
+        # ТАБЛИЦА НАСТРОЕК ПРИЛОЖЕНИЯ
         # ====================================================================
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS app_settings (
@@ -501,13 +921,11 @@ def _create_new_database():
             )
         ''')
         
-        # Сохраняем версию БД
         cursor.execute('''
             INSERT OR REPLACE INTO app_settings (key, value)
             VALUES ('db_version', ?)
         ''', (CURRENT_DB_VERSION,))
         
-        # Сохраняем дату создания
         cursor.execute('''
             INSERT OR REPLACE INTO app_settings (key, value)
             VALUES ('created_at', ?)
@@ -623,7 +1041,7 @@ def _create_new_database():
             )
         ''')
         
-        # [НОВОЕ] Таблица для истории реализаций из резерва
+        # Таблица для истории реализаций из резерва
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS reserve_sales_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -703,8 +1121,6 @@ def _create_new_database():
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_production_date_product ON production(production_date, product_name)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_sales_date_product ON sales(sale_date, product_name)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_cement_receipts_silo_date ON cement_receipts(silo_name, receipt_date)')
-        
-        # [НОВОЕ] Индексы для таблицы истории реализаций из резерва
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_reserve_sales_history_reserve ON reserve_sales_history(reserve_id)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_reserve_sales_history_date ON reserve_sales_history(sale_date)')
         
@@ -715,20 +1131,22 @@ def _create_new_database():
         print(f"✗ Ошибка создания БД: {e}")
         raise
     finally:
-        return_connection(conn)
+        if is_pooled:
+            return_connection(conn)
+        else:
+            try:
+                conn.close()
+            except:
+                pass
 
 
 def _apply_migrations(from_version: str):
-    """
-    Применить миграции от указанной версии до текущей.
-    Args:
-         from_version: версия БД, от которой нужно мигрировать
-    """
+    """Применить миграции от указанной версии до текущей."""
     conn = get_connection()
     cursor = conn.cursor()
     try:
         # ====================================================================
-        # МИГРАЦИЯ 1: Добавление таблицы app_settings (если её нет)
+        # МИГРАЦИЯ 1: Добавление таблицы app_settings
         # ====================================================================
         if compare_version(from_version, '0.0.0') == 0:
             print("  → Миграция 1: Создание таблицы app_settings...")
@@ -750,14 +1168,14 @@ def _apply_migrations(from_version: str):
             from_version = '1.0.0'
         
         # ====================================================================
-        # МИГРАЦИЯ 2: Добавление поля equipment_name в sales (если нужно)
+        # МИГРАЦИЯ 2: Добавление поля equipment_name в sales
         # ====================================================================
         if compare_version(from_version, '1.0.0') < 0:
             try:
                 cursor.execute('ALTER TABLE sales ADD COLUMN equipment_name TEXT')
                 print("  → Миграция 2: Добавлено поле equipment_name в sales")
             except sqlite3.OperationalError:
-                pass  # Поле уже есть
+                pass
         
         # ====================================================================
         # МИГРАЦИЯ 3: Создание таблицы reserve_sales_history
@@ -783,10 +1201,6 @@ def _apply_migrations(from_version: str):
                 ON reserve_sales_history(sale_date)
             ''')
             from_version = '1.0.1'
-        
-        # ====================================================================
-        # БУДУЩИЕ МИГРАЦИИ добавляются здесь
-        # ====================================================================
         
         # ====================================================================
         # Обновляем версию БД
@@ -844,7 +1258,6 @@ def get_database_info():
             count = cursor.fetchone()[0]
             table_stats[table] = count
         
-        # Получаем версию БД
         version = 'unknown'
         try:
             cursor.execute("SELECT value FROM app_settings WHERE key='db_version'")
@@ -898,5 +1311,8 @@ def close_pool():
     """Закрыть пул соединений"""
     global _connection_pool
     if _connection_pool is not None:
-        _connection_pool.close_all()
+        try:
+            _connection_pool.close_all()
+        except Exception:
+            pass
         _connection_pool = None

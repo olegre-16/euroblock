@@ -2,7 +2,18 @@
 Базовый класс для всех окон программы.
 Все окна открываются сразу на полный экран.
 Единое оформление как в окне "Производство продукции".
-[ИЗМЕНЕНО] Добавлены методы-обёртки для messagebox и _restore_window_state.
+
+[ИЗМЕНЕНО]
+- Добавлены методы-обёртки для messagebox (предотвращают сворачивание окна)
+- Добавлен метод _restore_window_state() для восстановления окна
+- Убрана прокрутка левой панели колесом мыши
+- Гарантированное освобождение grab и уничтожение дочерних окон при закрытии
+- Callback вызывается ПЕРЕД уничтожением окна
+- [НОВОЕ] Таймер автообновления данных для сетевого режима (каждые 3 секунды)
+- [НОВОЕ] Метод _on_auto_refresh() для переопределения в наследниках
+- [НОВОE] Отложенное восстановление окна через after() для корректной работы на Windows
+- [НОВОЕ] Метод _final_raise() для финального поднятия окна
+- [НОВОЕ] Сохранение состояния окна перед messagebox (_saved_window_state)
 """
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -21,6 +32,12 @@ class BaseToplevelWindow:
         self.on_exit_callback = on_exit_callback
         self.window_title = title
         
+        # Флаг остановки таймера автообновления
+        self._auto_refresh_stopped = False
+        
+        # [НОВОЕ] Сохранённое состояние окна (для восстановления после messagebox)
+        self._saved_window_state = 'zoomed'
+        
         # Создаём Toplevel окно
         self.window = tk.Toplevel(parent)
         self.window.title(title)
@@ -34,33 +51,87 @@ class BaseToplevelWindow:
         
         # Строим интерфейс
         self._build_ui()
+        
+        # [НОВОЕ] Запускаем таймер автообновления для сетевого режима
+        self._start_auto_refresh_timer()
     
     def _build_ui(self):
         """Построить интерфейс окна. Переопределяется в наследниках."""
         pass
     
     # ========================================================================
-    # [НОВОЕ] Методы-обёртки для messagebox
+    # [ИЗМЕНЕНО] Методы-обёртки для messagebox
     # Предотвращают сворачивание окна при показе диалогов
     # ========================================================================
     def _prepare_for_messagebox(self):
-        """Подготовить окно перед показом messagebox"""
+        """
+        Подготовить окно перед показом messagebox.
+        [ИЗМЕНЕНО] Сохраняет текущее состояние окна для последующего восстановления.
+        """
         try:
+            # Сохраняем текущее состояние окна
+            self._saved_window_state = self.window.state()
+            
+            # Поднимаем окно на передний план
             self.window.attributes('-topmost', True)
+            self.window.lift()
+            self.window.focus_force()
             self.window.update_idletasks()
         except tk.TclError:
             pass
     
     def _restore_after_messagebox(self):
-        """Восстановить состояние окна после показа messagebox"""
+        """
+        Восстановить состояние окна после показа messagebox.
+        [ИЗМЕНЕНО] Используется отложенное восстановление через after(),
+        чтобы окно успело корректно развернуться на Windows.
+        """
+        def _do_restore():
+            try:
+                if not self.window.winfo_exists():
+                    return
+                
+                # Если окно свёрнуто — разворачиваем
+                if self.window.state() == 'iconic':
+                    self.window.deiconify()
+                    self.window.update_idletasks()
+                
+                # Восстанавливаем предыдущее состояние (обычно zoomed)
+                saved_state = getattr(self, '_saved_window_state', 'zoomed')
+                if saved_state == 'zoomed':
+                    self.window.state('zoomed')
+                
+                # Снимаем topmost
+                self.window.attributes('-topmost', False)
+                
+                # Поднимаем окно и даём фокус
+                self.window.lift()
+                self.window.focus_force()
+                self.window.update_idletasks()
+                
+                # Финальное поднятие через 100мс для надёжности
+                self.window.after(100, self._final_raise)
+            except tk.TclError:
+                pass
+        
+        # Запускаем восстановление в главном цикле событий
         try:
-            if self.window.state() == 'iconic':
-                self.window.deiconify()
-            self.window.state('zoomed')
-            self.window.attributes('-topmost', False)
+            self.window.after(10, _do_restore)
+        except tk.TclError:
+            pass
+    
+    def _final_raise(self):
+        """
+        Финальное поднятие окна после messagebox.
+        Вызывается через 100мс после основного восстановления.
+        """
+        try:
+            if not self.window.winfo_exists():
+                return
             self.window.lift()
             self.window.focus_force()
-            self.window.update_idletasks()
+            self.window.attributes('-topmost', True)
+            self.window.after(100, lambda: self.window.attributes('-topmost', False))
         except tk.TclError:
             pass
     
@@ -93,44 +164,174 @@ class BaseToplevelWindow:
         return result
     
     # ========================================================================
-    # [НОВОЕ] Метод восстановления состояния окна
+    # Метод восстановления состояния окна
     # ========================================================================
     def _restore_window_state(self):
-        """Восстановить окно в полноэкранном режиме"""
+        """
+        Восстановить окно в полноэкранном режиме.
+        Вызывать после операций для гарантии, что окно открыто.
+        [ИЗМЕНЕНО] Использует отложенное восстановление через after().
+        """
+        def _do_restore():
+            try:
+                if not self.window.winfo_exists():
+                    return
+                
+                if self.window.state() == 'iconic':
+                    self.window.deiconify()
+                    self.window.update_idletasks()
+                
+                self.window.state('zoomed')
+                self.window.lift()
+                self.window.focus_force()
+                self.window.attributes('-topmost', True)
+                self.window.after(100, lambda: self.window.attributes('-topmost', False))
+            except tk.TclError:
+                pass
+            except Exception as e:
+                print(f"⚠ Ошибка восстановления окна: {e}")
+        
         try:
-            if self.window.state() == 'iconic':
-                self.window.deiconify()
-            self.window.state('zoomed')
-            self.window.lift()
-            self.window.focus_force()
-            self.window.attributes('-topmost', True)
-            self.window.after(100, lambda: self.window.attributes('-topmost', False))
+            self.window.after(10, _do_restore)
         except tk.TclError:
             pass
-        except Exception as e:
-            print(f"⚠ Ошибка восстановления окна: {e}")
     
     # ========================================================================
-    # Остальные методы базового класса
+    # [НОВОЕ] ТАЙМЕР АВТООБНОВЛЕНИЯ ДАННЫХ
+    # ========================================================================
+    def _start_auto_refresh_timer(self):
+        """
+        Запустить таймер автообновления данных.
+        В сетевом режиме каждые 3 секунды вызывает _on_auto_refresh().
+        """
+        try:
+            from client_config import MODE
+            if MODE == 'network':
+                self._auto_refresh_interval = 3000  # 3 секунды
+                self._auto_refresh_stopped = False
+                self._schedule_auto_refresh()
+        except ImportError:
+            pass
+    
+    def _schedule_auto_refresh(self):
+        """Запланировать следующее автообновление"""
+        try:
+            if (hasattr(self, 'window') and 
+                self.window.winfo_exists() and 
+                not getattr(self, '_auto_refresh_stopped', False)):
+                self.window.after(
+                    self._auto_refresh_interval,
+                    self._do_auto_refresh
+                )
+        except tk.TclError:
+            pass
+    
+    def _do_auto_refresh(self):
+        """
+        Выполнить автообновление.
+        Проверяет, изменилась ли БД, и если да — вызывает _on_auto_refresh().
+        """
+        try:
+            # Проверяем, не остановлен ли таймер
+            if getattr(self, '_auto_refresh_stopped', False):
+                return
+            
+            # Проверяем, существует ли окно
+            if not hasattr(self, 'window') or not self.window.winfo_exists():
+                return
+            
+            # Проверяем, изменилась ли БД
+            from database.connection import get_db_sync_monitor
+            monitor = get_db_sync_monitor()
+            
+            if monitor.check_for_changes(force=True):
+                # БД изменилась — обновляем данные в окне
+                try:
+                    self._on_auto_refresh()
+                except Exception as e:
+                    print(f"⚠ Ошибка автообновления: {e}")
+            
+            # Планируем следующее обновление
+            self._schedule_auto_refresh()
+        except Exception as e:
+            print(f"⚠ Ошибка в _do_auto_refresh: {e}")
+            # Планируем следующее обновление даже при ошибке
+            try:
+                self._schedule_auto_refresh()
+            except:
+                pass
+    
+    def _on_auto_refresh(self):
+        """
+        Метод автообновления данных в окне.
+        Переопределяется в наследниках для обновления конкретных данных.
+        По умолчанию — ничего не делает.
+        """
+        pass
+    
+    # ========================================================================
+    # Закрытие окна
     # ========================================================================
     def _on_close(self):
-        """Закрытие окна"""
+        """
+        Закрытие окна.
+        Гарантированное освобождение grab и уничтожение дочерних окон.
+        """
+        # Останавливаем таймер автообновления
         try:
+            self._auto_refresh_stopped = True
+        except Exception:
+            pass
+        
+        try:
+            # Освобождаем grab, если он установлен
             try:
                 self.window.grab_release()
             except tk.TclError:
                 pass
-        except:
-            pass
-        self.window.destroy()
-        if self.on_exit_callback:
-            self.on_exit_callback()
+            
+            # Закрываем все дочерние Toplevel окна (диалоги, messagebox)
+            try:
+                for widget in list(self.window.winfo_children()):
+                    if isinstance(widget, tk.Toplevel):
+                        try:
+                            widget.grab_release()
+                        except tk.TclError:
+                            pass
+                        try:
+                            widget.destroy()
+                        except tk.TclError:
+                            pass
+            except Exception:
+                pass
+            
+            # Вызываем callback ПЕРЕД уничтожением окна
+            if self.on_exit_callback:
+                try:
+                    self.on_exit_callback()
+                except Exception:
+                    pass
+            
+            # Уничтожаем основное окно
+            try:
+                self.window.destroy()
+            except tk.TclError:
+                pass
+        except Exception as e:
+            print(f"⚠ Ошибка закрытия окна: {e}")
     
     def get_frame(self):
         return self.window
     
+    # ========================================================================
+    # Создание панелей
+    # ========================================================================
     def create_left_panel_with_scroll(self, parent_frame, width=None):
-        """Создать левую панель с прокруткой."""
+        """
+        Создать левую панель с прокруткой.
+        Прокрутка колесом мыши ПОЛНОСТЬЮ ОТКЛЮЧЕНА.
+        Скроллбар работает только через клик и перетаскивание мышью.
+        """
         if width is None:
             width = self.LEFT_PANEL_WIDTH
         
@@ -165,9 +366,7 @@ class BaseToplevelWindow:
         
         canvas.bind('<Configure>', _on_canvas_configure)
         
-        # [ИЗМЕНЕНО] Прокрутка колесом мыши ПОЛНОСТЬЮ ОТКЛЮЧЕНА
-        # Скроллбар работает только через клик и перетаскивание
-        
+        # Сохраняем ссылки
         self._scroll_canvas = canvas
         self._scroll_inner_frame = inner_frame
         self._scroll_left_frame = left_frame
@@ -206,6 +405,9 @@ class BaseToplevelWindow:
         content_frame.pack(fill=tk.BOTH, expand=True, padx=PADDING['main'], pady=(0, PADDING['main']))
         return content_frame
     
+    # ========================================================================
+    # Вспомогательные методы для создания элементов
+    # ========================================================================
     def add_field_label(self, parent, text):
         """Добавить метку поля."""
         lbl = tk.Label(

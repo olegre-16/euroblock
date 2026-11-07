@@ -310,3 +310,13 @@ class GeneralExpensesWindow(BaseToplevelWindow):
             self.show_info("Успех", message)
         else:
             self.show_error("Ошибка", message)
+
+    def _on_auto_refresh(self):
+        """
+        Автообновление данных при изменении БД другим компьютером.
+        Вызывается таймером из BaseToplevelWindow каждые 3 секунды.
+        """
+        try:
+            self.load_expenses()
+        except Exception as e:
+            print(f"⚠ Ошибка автообновления в GeneralExpensesWindow: {e}")

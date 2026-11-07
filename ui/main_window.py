@@ -1,6 +1,13 @@
 """
 Главное окно программы "ООО Евроблок".
-[ИЗМЕНЕНО] В заголовке окна отображается режим работы (СЕТЬ/СЕРВЕР/локальный).
+[ИЗМЕНЕНО]
+- Добавлен флаг _exiting для предотвращения повторных вызовов
+- Обработчик WM_DELETE_WINDOW для крестика в правом верхнем углу
+- Корректное закрытие всех окон и ресурсов при выходе
+- [НОВОЕ] Таймер автообновления данных для сетевого режима (каждые 3 секунды)
+- [НОВОЕ] Обновление склада и силосов при изменении БД другим компьютером
+- [НОВОЕ] Сортировка склада: сначала продукция с остатком, затем без остатка
+- [НОВОЕ] Светло-зелёная подсветка строк без остатка на складе
 """
 import os
 import tkinter as tk
@@ -28,30 +35,22 @@ from ui.widgets.silo_canvas import SiloCanvas
 from utils.resources import load_logo, set_window_icon
 
 
+# [НОВОЕ] Флаг завершения — для предотвращения повторных вызовов
+_exiting = False
+
+
 class EuroblockApp:
     def __init__(self, root, logo_image=None):
         self.root = root
         
-        # [НОВОЕ] Определяем режим работы для заголовка
-        try:
-            from client_config import MODE, NETWORK_DB_PATH
-            if MODE == 'network':
-                db_name = os.path.basename(NETWORK_DB_PATH) if NETWORK_DB_PATH else 'сеть'
-                self.root.title(f"ООО Евроблок - производство и финансы [СЕТЬ: {db_name}]")
-            elif MODE == 'server':
-                self.root.title("ООО Евроблок - производство и финансы [СЕРВЕР]")
-            else:
-                self.root.title("ООО Евроблок - производство и финансы")
-        except ImportError:
-            self.root.title("ООО Евроблок - производство и финансы")
+        # [НОВОЕ] Обработчик закрытия главного окна (крестик в правом верхнем углу)
+        self.root.protocol("WM_DELETE_WINDOW", self._on_root_close)
         
         self.root.state('zoomed')
         self.root.configure(bg=COLORS['background'])
         
-        # ===== УСТАНОВКА ИКОНКИ ОКНА =====
         set_window_icon(root, logo_image)
         
-        # ===== ГЛОБАЛЬНАЯ НАСТРОЙКА СТИЛЕЙ TTK =====
         style = ttk.Style()
         style.configure('TCombobox', font=FONTS['field'])
         style.configure('TCombobox', padding=(5, SIZES['field_ipady'], 5, SIZES['field_ipady']))
@@ -65,7 +64,6 @@ class EuroblockApp:
         self.current_window = None
         self.main_buttons = []
         
-        # ===== МАСШТАБИРОВАНИЕ ЛОГОТИПА =====
         self.logo_image = None
         if logo_image is not None:
             import tkinter.font as tkfont
@@ -76,87 +74,59 @@ class EuroblockApp:
             total_height = title_height + PADDING['title_subtitle'] + subtitle_height
             self.logo_image = self._resize_logo(logo_image, total_height)
         
-        # Главный контейнер
         self.main_frame = tk.Frame(root, bg=COLORS['background'])
         self.main_frame.pack(fill=tk.BOTH, expand=True)
         
-        # ===== ЗАГОЛОВОК С ЛОГОТИПОМ =====
         self.title_frame = tk.Frame(self.main_frame, bg=COLORS['background'])
         self.title_frame.pack(fill=tk.X, padx=PADDING['main'], pady=PADDING['main'])
         
         if self.logo_image:
             logo_container = tk.Frame(self.title_frame, bg=COLORS['background'])
             logo_container.pack(side=tk.LEFT, padx=(0, 15))
-            logo_label = tk.Label(
-                logo_container,
-                image=self.logo_image,
-                bg=COLORS['background']
-            )
+            logo_label = tk.Label(logo_container, image=self.logo_image, bg=COLORS['background'])
             logo_label.pack(anchor='w')
             
             text_container = tk.Frame(self.title_frame, bg=COLORS['background'])
             text_container.pack(side=tk.LEFT, fill=tk.Y)
             
             self.title_label = tk.Label(
-                text_container,
-                text="ООО Евроблок",
-                font=FONTS['title'],
-                bg=COLORS['background'],
-                fg=COLORS['title_text']
+                text_container, text="ООО Евроблок",
+                font=FONTS['title'], bg=COLORS['background'], fg=COLORS['title_text']
             )
             self.title_label.pack(anchor='w')
             
             self.subtitle_label = tk.Label(
-                text_container,
-                text="производство и финансы",
-                font=FONTS['subtitle'],
-                bg=COLORS['background'],
-                fg=COLORS['subtitle_text']
+                text_container, text="производство и финансы",
+                font=FONTS['subtitle'], bg=COLORS['background'], fg=COLORS['subtitle_text']
             )
             self.subtitle_label.pack(anchor='w', pady=(PADDING['title_subtitle'], 0))
         else:
             self.title_label = tk.Label(
-                self.title_frame,
-                text="ООО Евроблок",
-                font=FONTS['title'],
-                bg=COLORS['background'],
-                fg=COLORS['title_text']
+                self.title_frame, text="ООО Евроблок",
+                font=FONTS['title'], bg=COLORS['background'], fg=COLORS['title_text']
             )
             self.title_label.pack(anchor='w')
-            
             self.subtitle_label = tk.Label(
-                self.title_frame,
-                text="производство и финансы",
-                font=FONTS['subtitle'],
-                bg=COLORS['background'],
-                fg=COLORS['subtitle_text']
+                self.title_frame, text="производство и финансы",
+                font=FONTS['subtitle'], bg=COLORS['background'], fg=COLORS['subtitle_text']
             )
             self.subtitle_label.pack(anchor='w', pady=(PADDING['title_subtitle'], 0))
         
-        # Контейнер для панели и рабочей области
         self.content_frame = tk.Frame(self.main_frame, bg=COLORS['background'])
         self.content_frame.pack(fill=tk.BOTH, expand=True, padx=PADDING['main'], pady=(0, PADDING['main']))
         
-        # Левая панель с кнопками
         self.left_panel = tk.Frame(
-            self.content_frame, 
-            bg=COLORS['panel_bg'], 
-            relief=tk.RAISED, 
-            bd=SIZES['panel_border']
+            self.content_frame, bg=COLORS['panel_bg'],
+            relief=tk.RAISED, bd=SIZES['panel_border']
         )
         self.left_panel.pack(side=tk.LEFT, fill=tk.Y, padx=(0, PADDING['main']))
         
         main_buttons_list = [
-            "Поступление цемента",
-            "Производство продукции",
-            "Продукция в резерве",
-            "Реализация продукции",
-            "Касса",
-            "Расходы общие",
-            "Отчет по цементу",
-            "Отчет по расходам",
-            "Отчет по реализации",
-            "Отчет по производству продукции",
+            "Поступление цемента", "Производство продукции",
+            "Продукция в резерве", "Реализация продукции",
+            "Касса", "Расходы общие",
+            "Отчет по цементу", "Отчет по расходам",
+            "Отчет по реализации", "Отчет по производству продукции",
             "Расход инертных материалов"
         ]
         
@@ -168,39 +138,26 @@ class EuroblockApp:
         
         for btn_text in main_buttons_list:
             btn = tk.Button(
-                self.button_frame,
-                text=btn_text,
-                font=FONTS['menu'],
-                width=button_width,
-                anchor='w',
+                self.button_frame, text=btn_text, font=FONTS['menu'],
+                width=button_width, anchor='w',
                 command=lambda b=btn_text: self.show_section(b),
-                bg=COLORS['button_primary'],
-                fg=COLORS['button_text'],
-                relief=tk.FLAT,
-                padx=PADDING['button_x'],
-                pady=PADDING['button_y']
+                bg=COLORS['button_primary'], fg=COLORS['button_text'],
+                relief=tk.FLAT, padx=PADDING['button_x'], pady=PADDING['button_y']
             )
             btn.pack(fill=tk.X, pady=PADDING['button_spacing'])
             btn.bind('<Enter>', lambda e, b=btn: self._on_main_enter(b))
             btn.bind('<Leave>', lambda e, b=btn: self._on_main_leave(b))
             self.main_buttons.append(btn)
         
-        # Кнопка "Выход из программы"
         self.exit_main_frame = tk.Frame(self.left_panel, bg=COLORS['panel_bg'])
         self.exit_main_frame.pack(fill=tk.X, side=tk.BOTTOM, padx=PADDING['button_x'], pady=(PADDING['exit_spacing_top'], PADDING['button_x']))
         
         self.exit_main_btn = tk.Button(
-            self.exit_main_frame,
-            text="Выход из программы",
-            font=FONTS['menu'],
-            width=button_width,
-            anchor='w',
+            self.exit_main_frame, text="Выход из программы",
+            font=FONTS['menu'], width=button_width, anchor='w',
             command=self.exit_program,
-            bg=COLORS['button_settings'],
-            fg=COLORS['button_text'],
-            relief=tk.FLAT,
-            padx=PADDING['button_x'],
-            pady=PADDING['button_y'],
+            bg=COLORS['button_settings'], fg=COLORS['button_text'],
+            relief=tk.FLAT, padx=PADDING['button_x'], pady=PADDING['button_y'],
             cursor='hand2'
         )
         self.exit_main_btn.pack(fill=tk.X)
@@ -208,40 +165,36 @@ class EuroblockApp:
         self.exit_main_btn.bind('<Leave>', lambda e: self._on_exit_main_leave())
         self.main_buttons.append(self.exit_main_btn)
         
-        # Кнопка "Настройки"
         self.settings_frame = tk.Frame(self.left_panel, bg=COLORS['panel_bg'])
         self.settings_frame.pack(fill=tk.X, side=tk.BOTTOM, padx=PADDING['button_x'], pady=(0, PADDING['button_x']))
         
         self.settings_btn = tk.Button(
-            self.settings_frame,
-            text="Настройки",
-            font=FONTS['menu'],
-            width=button_width,
-            anchor='w',
+            self.settings_frame, text="Настройки",
+            font=FONTS['menu'], width=button_width, anchor='w',
             command=self.show_settings,
-            bg=COLORS['button_import'],
-            fg=COLORS['title_text'],
-            relief=tk.FLAT,
-            padx=PADDING['button_x'],
-            pady=PADDING['button_y']
+            bg=COLORS['button_import'], fg=COLORS['title_text'],
+            relief=tk.FLAT, padx=PADDING['button_x'], pady=PADDING['button_y']
         )
         self.settings_btn.pack(fill=tk.X)
         self.settings_btn.bind('<Enter>', lambda e: self.settings_btn.config(bg=COLORS['button_import_hover']))
         self.settings_btn.bind('<Leave>', lambda e: self.settings_btn.config(bg=COLORS['button_import']))
         
-        # Рабочая область
         self.work_area = tk.Frame(
-            self.content_frame, 
-            bg=COLORS['panel_bg'], 
-            relief=tk.RAISED, 
-            bd=SIZES['panel_border']
+            self.content_frame, bg=COLORS['panel_bg'],
+            relief=tk.RAISED, bd=SIZES['panel_border']
         )
         self.work_area.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
         self.show_welcome()
     
+    # ========================================================================
+    # [НОВОЕ] Обработчик закрытия главного окна (крестик)
+    # ========================================================================
+    def _on_root_close(self):
+        """Обработчик события закрытия главного окна (крестик в правом верхнем углу)"""
+        self.exit_program()
+    
     def _resize_logo(self, image, target_height):
-        """Масштабировать логотип пропорционально"""
         if image is None:
             return None
         orig_height = image.height()
@@ -251,8 +204,7 @@ class EuroblockApp:
             return image
         ratio = target_height / orig_height
         best_diff = float('inf')
-        best_zoom = 1
-        best_subsample = 1
+        best_zoom = best_subsample = 1
         for subsample in range(1, 30):
             zoom = max(1, round(ratio * subsample))
             actual_ratio = zoom / subsample
@@ -298,12 +250,14 @@ class EuroblockApp:
         self.settings_btn.config(state='normal', bg=COLORS['button_import'])
     
     def clear_work_area(self):
+        # [НОВОЕ] Останавливаем таймер автообновления при очистке рабочей области
+        self._main_auto_refresh_stopped = True
+        
         for widget in self.work_area.winfo_children():
             widget.destroy()
         self.current_settings_panel = None
     
     def _destroy_current_window_safely(self):
-        """Безопасно уничтожить текущее открытое окно."""
         if self.current_window is not None:
             try:
                 window = None
@@ -313,7 +267,6 @@ class EuroblockApp:
                     toplevel = self.current_window.main_frame.winfo_toplevel()
                     if str(toplevel) != str(self.root):
                         window = toplevel
-                
                 if window is not None and window.winfo_exists():
                     try:
                         window.grab_release()
@@ -328,7 +281,6 @@ class EuroblockApp:
                 self.current_window = None
     
     def show_welcome(self):
-        """Показать приветственную рабочую область с тремя блоками"""
         self.clear_work_area()
         
         welcome_container = tk.Frame(self.work_area, bg=COLORS['background'])
@@ -340,21 +292,16 @@ class EuroblockApp:
         right_half = tk.Frame(welcome_container, bg=COLORS['background'])
         right_half.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
-        # ===== БЛОК 1: Склад =====
+        # БЛОК 1: Склад
         warehouse_frame = tk.Frame(
-            left_half,
-            bg=COLORS['panel_bg'],
-            relief=tk.RAISED,
-            bd=SIZES['panel_border']
+            left_half, bg=COLORS['panel_bg'],
+            relief=tk.RAISED, bd=SIZES['panel_border']
         )
         warehouse_frame.pack(fill=tk.BOTH, expand=True)
         
         tk.Label(
-            warehouse_frame,
-            text="Склад",
-            font=FONTS['section_title'],
-            bg=COLORS['panel_bg'],
-            fg=COLORS['title_text']
+            warehouse_frame, text="Склад",
+            font=FONTS['section_title'], bg=COLORS['panel_bg'], fg=COLORS['title_text']
         ).pack(pady=(10, 5), anchor='w', padx=10)
         
         wh_tree_container = tk.Frame(warehouse_frame, bg=COLORS['panel_bg'])
@@ -366,9 +313,7 @@ class EuroblockApp:
         self.warehouse_tree = ttk.Treeview(
             wh_tree_container,
             columns=('product', 'color', 'stock', 'reserved', 'remaining'),
-            show='headings',
-            yscrollcommand=wh_scrollbar_y.set,
-            selectmode='browse'
+            show='headings', yscrollcommand=wh_scrollbar_y.set, selectmode='browse'
         )
         self.warehouse_tree.heading('product', text='Продукция', anchor='w')
         self.warehouse_tree.heading('color', text='Цвет', anchor='w')
@@ -384,52 +329,42 @@ class EuroblockApp:
         self.warehouse_tree.pack(fill=tk.BOTH, expand=True)
         self.warehouse_tree.bind('<Double-Button-1>', self._on_warehouse_double_click)
         
+        # [НОВОЕ] Настраиваем тег для строк с продукцией, которой нет на складе
+        self.warehouse_tree.tag_configure('no_stock', background='#d4edda')
+        
         self.load_warehouse_data()
         
-        # ===== БЛОК 2: Силоса =====
+        # БЛОК 2: Силоса
         silos_frame = tk.Frame(
-            right_half,
-            bg=COLORS['panel_bg'],
-            relief=tk.RAISED,
-            bd=SIZES['panel_border']
+            right_half, bg=COLORS['panel_bg'],
+            relief=tk.RAISED, bd=SIZES['panel_border']
         )
         silos_frame.pack(fill=tk.X, pady=(0, 10))
         
         tk.Label(
-            silos_frame,
-            text="Текущий уровень наполнения силосов",
-            font=FONTS['menu'],
-            bg=COLORS['panel_bg'],
-            fg=COLORS['title_text']
+            silos_frame, text="Текущий уровень наполнения силосов",
+            font=FONTS['menu'], bg=COLORS['panel_bg'], fg=COLORS['title_text']
         ).pack(pady=(10, 5), anchor='w', padx=10)
         
-        silos_canvas_container = tk.Frame(silos_frame, bg=COLORS['panel_bg'])
-        silos_canvas_container.pack(fill=tk.X, padx=10, pady=(0, 10))
+        # [НОВОЕ] Сохраняем ссылку на контейнер силосов для автообновления
+        self.silos_canvas_container = tk.Frame(silos_frame, bg=COLORS['panel_bg'])
+        self.silos_canvas_container.pack(fill=tk.X, padx=10, pady=(0, 10))
         
         silos_data = cement_silos_repo.get_all()
         balances = cement_receipts_repo.get_current_balance_by_silo()
-        self.silos_canvas = SiloCanvas(
-            silos_canvas_container,
-            silos_data,
-            balances
-        )
+        self.silos_canvas = SiloCanvas(self.silos_canvas_container, silos_data, balances)
         self.silos_canvas.pack(side=tk.LEFT, fill=tk.X, expand=True)
         
-        # ===== БЛОК 3: Производство продукции =====
+        # БЛОК 3: Производство
         prod_frame = tk.Frame(
-            right_half,
-            bg=COLORS['panel_bg'],
-            relief=tk.RAISED,
-            bd=SIZES['panel_border']
+            right_half, bg=COLORS['panel_bg'],
+            relief=tk.RAISED, bd=SIZES['panel_border']
         )
         prod_frame.pack(fill=tk.BOTH, expand=True)
         
         tk.Label(
-            prod_frame,
-            text="Производство продукции",
-            font=FONTS['section_title'],
-            bg=COLORS['panel_bg'],
-            fg=COLORS['title_text']
+            prod_frame, text="Производство продукции",
+            font=FONTS['section_title'], bg=COLORS['panel_bg'], fg=COLORS['title_text']
         ).pack(pady=(10, 5), anchor='w', padx=10)
         
         prod_tree_container = tk.Frame(prod_frame, bg=COLORS['panel_bg'])
@@ -441,9 +376,7 @@ class EuroblockApp:
         self.production_tree = ttk.Treeview(
             prod_tree_container,
             columns=('date', 'equipment', 'product', 'color', 'quantity'),
-            show='headings',
-            yscrollcommand=prod_scrollbar_y.set,
-            selectmode='browse'
+            show='headings', yscrollcommand=prod_scrollbar_y.set, selectmode='browse'
         )
         self.production_tree.heading('date', text='Дата', anchor='w')
         self.production_tree.heading('equipment', text='Оборудование', anchor='w')
@@ -459,9 +392,11 @@ class EuroblockApp:
         self.production_tree.pack(fill=tk.BOTH, expand=True)
         
         self.load_production_summary()
+        
+        # [НОВОЕ] Запускаем таймер автообновления для сетевого режима
+        self._start_main_auto_refresh()
     
     def _on_warehouse_double_click(self, event):
-        """Открывает окно корректировки остатков при двойном клике"""
         selected = self.warehouse_tree.selection()
         if not selected:
             return
@@ -477,7 +412,6 @@ class EuroblockApp:
         self._show_adjustment_dialog(product, color, current_stock)
     
     def _show_adjustment_dialog(self, product, color, current_stock):
-        """Диалоговое окно корректировки остатков"""
         dialog = tk.Toplevel(self.root)
         dialog.title("Корректировка остатков")
         dialog.configure(bg=COLORS['panel_bg'])
@@ -498,11 +432,8 @@ class EuroblockApp:
         dialog.geometry(f"{dialog_width}x{dialog_height}+{x}+{y}")
         
         tk.Label(
-            dialog, 
-            text="Корректировка остатков", 
-            font=FONTS['section_title'], 
-            bg=COLORS['panel_bg'], 
-            fg=COLORS['title_text']
+            dialog, text="Корректировка остатков",
+            font=FONTS['section_title'], bg=COLORS['panel_bg'], fg=COLORS['title_text']
         ).pack(pady=(15, 10))
         
         tk.Frame(dialog, height=2, bg=COLORS['button_primary']).pack(fill=tk.X, padx=20, pady=(0, 10))
@@ -514,23 +445,14 @@ class EuroblockApp:
             row = tk.Frame(info_frame, bg=COLORS['panel_bg'])
             row.pack(fill=tk.X, pady=2)
             tk.Label(
-                row, 
-                text=f"{label_text}:", 
-                font=FONTS['field'], 
-                bg=COLORS['panel_bg'], 
-                fg=COLORS['work_area_text'], 
-                width=22, 
-                anchor='w'
+                row, text=f"{label_text}:", font=FONTS['field'],
+                bg=COLORS['panel_bg'], fg=COLORS['work_area_text'],
+                width=22, anchor='w'
             ).pack(side=tk.LEFT, padx=(0, 10))
             tk.Label(
-                row, 
-                text=value_text, 
-                font=FONTS['field'], 
-                bg=COLORS['panel_bg'], 
-                fg=COLORS['title_text'], 
-                anchor='w', 
-                justify='left', 
-                wraplength=dialog_width - 180
+                row, text=value_text, font=FONTS['field'],
+                bg=COLORS['panel_bg'], fg=COLORS['title_text'],
+                anchor='w', justify='left', wraplength=dialog_width - 180
             ).pack(side=tk.LEFT, fill=tk.X, expand=True)
         
         _add_info_row("Продукция", product)
@@ -540,21 +462,14 @@ class EuroblockApp:
         tk.Frame(dialog, height=1, bg=COLORS['work_area_text']).pack(fill=tk.X, padx=20, pady=10)
         
         tk.Label(
-            dialog, 
-            text="Новый остаток (шт/м2):", 
-            font=FONTS['menu'], 
-            bg=COLORS['panel_bg'], 
-            fg=COLORS['title_text']
+            dialog, text="Новый остаток (шт/м2):",
+            font=FONTS['menu'], bg=COLORS['panel_bg'], fg=COLORS['title_text']
         ).pack(anchor='w', padx=20, pady=(0, 5))
         
         new_stock_var = tk.StringVar(value=self._format_number(current_stock))
         new_stock_entry = tk.Entry(
-            dialog, 
-            textvariable=new_stock_var, 
-            font=FONTS['field'], 
-            relief=tk.SOLID, 
-            bd=1, 
-            justify='left'
+            dialog, textvariable=new_stock_var, font=FONTS['field'],
+            relief=tk.SOLID, bd=1, justify='left'
         )
         new_stock_entry.pack(fill=tk.X, padx=20, pady=(0, 15))
         
@@ -589,32 +504,18 @@ class EuroblockApp:
         btn_frame.pack(fill=tk.X, padx=20, pady=(0, 15))
         
         save_btn = tk.Button(
-            btn_frame, 
-            text="Сохранить", 
-            font=FONTS['menu'], 
-            command=on_save, 
-            bg=COLORS['button_primary'], 
-            fg=COLORS['button_text'], 
-            relief=tk.FLAT, 
-            padx=15, 
-            pady=5, 
-            cursor='hand2'
+            btn_frame, text="Сохранить", font=FONTS['menu'], command=on_save,
+            bg=COLORS['button_primary'], fg=COLORS['button_text'],
+            relief=tk.FLAT, padx=15, pady=5, cursor='hand2'
         )
         save_btn.pack(side=tk.LEFT, padx=(0, 10))
         save_btn.bind('<Enter>', lambda e: save_btn.config(bg=COLORS['button_primary_hover']))
         save_btn.bind('<Leave>', lambda e: save_btn.config(bg=COLORS['button_primary']))
         
         cancel_btn = tk.Button(
-            btn_frame, 
-            text="Отмена", 
-            font=FONTS['menu'], 
-            command=on_cancel, 
-            bg=COLORS['button_settings'], 
-            fg=COLORS['button_text'], 
-            relief=tk.FLAT, 
-            padx=15, 
-            pady=5, 
-            cursor='hand2'
+            btn_frame, text="Отмена", font=FONTS['menu'], command=on_cancel,
+            bg=COLORS['button_settings'], fg=COLORS['button_text'],
+            relief=tk.FLAT, padx=15, pady=5, cursor='hand2'
         )
         cancel_btn.pack(side=tk.RIGHT)
         cancel_btn.bind('<Enter>', lambda e: cancel_btn.config(bg=COLORS['button_settings_hover']))
@@ -624,8 +525,16 @@ class EuroblockApp:
         new_stock_entry.focus_set()
         self.root.wait_window(dialog)
     
+    # ========================================================================
+    # [ИЗМЕНЕНО] Загрузка данных склада с новой сортировкой и подсветкой
+    # ========================================================================
     def load_warehouse_data(self):
-        """Загружает данные в таблицу 'Склад'."""
+        """
+        Загрузить данные в таблицу 'Склад'.
+        [ИЗМЕНЕНО] 
+        - Сначала продукция с остатком (в алфавитном порядке)
+        - Затем продукция без остатка (в алфавитном порядке, со светло-зелёным фоном)
+        """
         for item in self.warehouse_tree.get_children():
             self.warehouse_tree.delete(item)
         
@@ -665,43 +574,55 @@ class EuroblockApp:
             key = (product.strip(), color.strip())
             reserved_grouped[key] = reserved_grouped.get(key, 0) + quantity
         
-        all_keys = (set(stock_grouped.keys()) | 
-                   set(reserved_grouped.keys()) | 
-                   set(sold_from_reserve_sum.keys()) | 
+        # Собираем все ключи без фильтрации нулевых записей
+        all_keys = (set(stock_grouped.keys()) |
+                   set(reserved_grouped.keys()) |
+                   set(sold_from_reserve_sum.keys()) |
                    set(direct_sales_sum.keys()) |
                    set(adjustments.keys()))
         
-        def sort_key(key):
-            product, color = key
-            has_brak = 1 if '(брак)' in product else 0
-            return (has_brak, product.lower(), color.lower())
+        # [НОВОЕ] Разделяем записи на две группы
+        with_stock = []      # Продукция с остатком на складе
+        without_stock = []   # Продукция без остатка на складе
         
-        for key in sorted(all_keys, key=sort_key):
+        for key in all_keys:
             product, color = key
             stock_qty = stock_grouped.get(key, 0)
             reserved_qty = reserved_grouped.get(key, 0)
             remaining_qty = stock_qty - reserved_qty
             
-            has_activity = (key in sold_from_reserve_sum or 
-                          key in direct_sales_sum or 
-                          key in adjustments)
-            
-            if stock_qty == 0 and reserved_qty == 0 and not has_activity:
-                continue
-            
-            self.warehouse_tree.insert(
-                '', 'end',
-                values=(
-                    product,
-                    color if color else '—',
-                    self._format_number(stock_qty),
-                    self._format_number(reserved_qty),
-                    self._format_number(remaining_qty)
-                )
+            row_data = (
+                product,
+                color if color else '—',
+                self._format_number(stock_qty),
+                self._format_number(reserved_qty),
+                self._format_number(remaining_qty)
             )
+            
+            # [НОВОЕ] Разделяем по наличию остатка
+            if remaining_qty > 0:
+                with_stock.append(row_data)
+            else:
+                without_stock.append(row_data)
+        
+        # [НОВОЕ] Сортируем каждую группу по алфавиту (продукция, затем цвет)
+        def sort_key(row):
+            product = row[0].lower()
+            color = row[1].lower() if row[1] != '—' else ''
+            return (product, color)
+        
+        with_stock.sort(key=sort_key)
+        without_stock.sort(key=sort_key)
+        
+        # [НОВОЕ] Сначала вставляем записи с остатком
+        for row_data in with_stock:
+            self.warehouse_tree.insert('', 'end', values=row_data)
+        
+        # [НОВОЕ] Затем записи без остатка со светло-зелёным фоном
+        for row_data in without_stock:
+            self.warehouse_tree.insert('', 'end', values=row_data, tags=('no_stock',))
     
     def load_production_summary(self):
-        """Загрузить сводку производства"""
         for item in self.production_tree.get_children():
             self.production_tree.delete(item)
         
@@ -721,16 +642,13 @@ class EuroblockApp:
             self.production_tree.insert(
                 '', 'end',
                 values=(
-                    date,
-                    equipment,
-                    product,
+                    date, equipment, product,
                     color if color else '—',
                     self._format_number(calc_qty)
                 )
             )
     
     def _format_number(self, value):
-        """Форматировать число"""
         if value is None or value == '':
             return '0'
         try:
@@ -743,7 +661,6 @@ class EuroblockApp:
             return str(value)
     
     def show_section(self, section_name):
-        """Показать содержимое раздела главного меню."""
         self._destroy_current_window_safely()
         
         all_windows = {
@@ -771,13 +688,9 @@ class EuroblockApp:
             self._show_placeholder(section_name)
     
     def _show_placeholder(self, name):
-        """Показать заглушку для раздела"""
         title_label = tk.Label(
-            self.work_area,
-            text=name,
-            font=FONTS['section_title'],
-            bg=COLORS['panel_bg'],
-            fg=COLORS['title_text']
+            self.work_area, text=name,
+            font=FONTS['section_title'], bg=COLORS['panel_bg'], fg=COLORS['title_text']
         )
         title_label.pack(pady=20, anchor='w', padx=20)
         
@@ -785,11 +698,8 @@ class EuroblockApp:
         separator.pack(fill=tk.X, padx=20, pady=(0, 20))
         
         content = tk.Label(
-            self.work_area,
-            text=f"Раздел \"{name}\" находится в разработке",
-            font=FONTS['work_area'],
-            bg=COLORS['panel_bg'],
-            fg=COLORS['work_area_text']
+            self.work_area, text=f"Раздел \"{name}\" находится в разработке",
+            font=FONTS['work_area'], bg=COLORS['panel_bg'], fg=COLORS['work_area_text']
         )
         content.pack(expand=True)
     
@@ -798,8 +708,7 @@ class EuroblockApp:
         self.clear_work_area()
         self.disable_main_buttons()
         self.current_settings_panel = SettingsPanel(
-            self.work_area, 
-            self.hide_settings,
+            self.work_area, self.hide_settings,
             on_open_window_callback=self._on_settings_window_open,
             on_close_window_callback=self._on_settings_window_close
         )
@@ -819,12 +728,194 @@ class EuroblockApp:
         self.show_welcome()
     
     def hide_current_window(self):
-        """Разблокировать кнопки главного меню после закрытия окна"""
         self.current_window = None
         self.clear_work_area()
         self.enable_main_buttons()
         self.show_welcome()
     
+    # ========================================================================
+    # [НОВОЕ] ТАЙМЕР АВТООБНОВЛЕНИЯ ГЛАВНОГО ОКНА
+    # ========================================================================
+    def _start_main_auto_refresh(self):
+        """Запустить таймер автообновления главного окна в сетевом режиме"""
+        try:
+            from client_config import MODE
+            if MODE == 'network':
+                self._main_auto_refresh_interval = 3000  # 3 секунды
+                self._main_auto_refresh_stopped = False
+                self._schedule_main_auto_refresh()
+        except ImportError:
+            pass
+    
+    def _schedule_main_auto_refresh(self):
+        """Запланировать следующее автообновление главного окна"""
+        try:
+            if (hasattr(self, 'root') and 
+                self.root.winfo_exists() and 
+                not getattr(self, '_main_auto_refresh_stopped', False)):
+                self.root.after(
+                    self._main_auto_refresh_interval,
+                    self._do_main_auto_refresh
+                )
+        except tk.TclError:
+            pass
+    
+    def _do_main_auto_refresh(self):
+        """Выполнить автообновление главного окна"""
+        try:
+            if getattr(self, '_main_auto_refresh_stopped', False):
+                return
+            
+            if not hasattr(self, 'root') or not self.root.winfo_exists():
+                return
+            
+            # Проверяем, изменилась ли БД
+            from database.connection import get_db_sync_monitor
+            monitor = get_db_sync_monitor()
+            
+            if monitor.check_for_changes(force=True):
+                # БД изменилась — обновляем данные на главном экране
+                try:
+                    self._on_main_auto_refresh()
+                except Exception as e:
+                    print(f"⚠ Ошибка автообновления главного окна: {e}")
+            
+            # Планируем следующее обновление
+            self._schedule_main_auto_refresh()
+        except Exception as e:
+            print(f"⚠ Ошибка в _do_main_auto_refresh: {e}")
+            try:
+                self._schedule_main_auto_refresh()
+            except:
+                pass
+    
+    def _on_main_auto_refresh(self):
+        """
+        Обновить данные на главном экране.
+        Вызывается при обнаружении изменений в БД другим компьютером.
+        """
+        try:
+            # Обновляем таблицу склада
+            if hasattr(self, 'warehouse_tree'):
+                try:
+                    if self.warehouse_tree.winfo_exists():
+                        self.load_warehouse_data()
+                except tk.TclError:
+                    pass
+            
+            # Обновляем визуализацию силосов
+            if hasattr(self, 'silos_canvas_container'):
+                try:
+                    if self.silos_canvas_container.winfo_exists():
+                        # Удаляем старый канвас
+                        if hasattr(self, 'silos_canvas'):
+                            try:
+                                self.silos_canvas.destroy()
+                            except tk.TclError:
+                                pass
+                        
+                        # Создаём новый канвас с актуальными данными
+                        silos_data = cement_silos_repo.get_all()
+                        balances = cement_receipts_repo.get_current_balance_by_silo()
+                        self.silos_canvas = SiloCanvas(
+                            self.silos_canvas_container, 
+                            silos_data, 
+                            balances
+                        )
+                        self.silos_canvas.pack(side=tk.LEFT, fill=tk.X, expand=True)
+                except tk.TclError:
+                    pass
+            
+            # Обновляем таблицу производства
+            if hasattr(self, 'production_tree'):
+                try:
+                    if self.production_tree.winfo_exists():
+                        self.load_production_summary()
+                except tk.TclError:
+                    pass
+        except Exception as e:
+            print(f"⚠ Ошибка обновления главного окна: {e}")
+    
+    # ========================================================================
+    # [ИЗМЕНЕНО] Корректное закрытие всех окон и ресурсов при выходе
+    # ========================================================================
     def exit_program(self):
+        """
+        Выход из программы.
+        [ИЗМЕНЕНО] Простая синхронная логика БЕЗ потоков.
+        """
+        global _exiting
+        if _exiting:
+            return
+        
         if messagebox.askyesno("Выход", "Вы действительно хотите выйти из программы?"):
-            self.root.destroy()
+            _exiting = True
+            
+            # [НОВОЕ] Останавливаем таймер автообновления главного окна
+            self._main_auto_refresh_stopped = True
+            
+            # Закрываем текущее открытое окно (если есть)
+            if self.current_window is not None:
+                try:
+                    self._destroy_current_window_safely()
+                except Exception:
+                    pass
+            
+            # Закрываем панель настроек (если открыта)
+            if self.current_settings_panel is not None:
+                try:
+                    self.current_settings_panel = None
+                except Exception:
+                    pass
+            
+            # Закрываем все дочерние окна корневого окна
+            try:
+                for widget in list(self.root.winfo_children()):
+                    if isinstance(widget, tk.Toplevel):
+                        try:
+                            widget.grab_release()
+                        except tk.TclError:
+                            pass
+                        try:
+                            widget.destroy()
+                        except tk.TclError:
+                            pass
+            except Exception:
+                pass
+            
+            # Закрываем пул соединений с БД
+            try:
+                from database.connection import close_pool
+                close_pool()
+            except Exception:
+                pass
+            
+            # Закрываем кэш
+            try:
+                from database.cache import query_cache
+                query_cache.clear()
+            except Exception:
+                pass
+            
+            # Останавливаем mainloop
+            try:
+                self.root.quit()
+            except Exception:
+                pass
+            
+            # Уничтожаем главное окно
+            try:
+                self.root.update()
+            except Exception:
+                pass
+            
+            try:
+                self.root.destroy()
+            except Exception:
+                pass
+            
+            # Принудительное завершение процесса
+            try:
+                os._exit(0)
+            except Exception:
+                pass

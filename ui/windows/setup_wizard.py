@@ -1,10 +1,17 @@
 """
 Мастер первоначальной настройки программы.
 Запускается только при первом запуске.
-Определяет роль компьютера (основной/клиент) и настраивает подключение.
+Определяет роль режима работы (локальный/сетевой) и настраивает подключение.
+[ИЗМЕНЕНО] 
+- Для сетевого режима используется диалог выбора папки (filedialog.askdirectory)
+- Путь к БД формируется автоматически: выбранная_папка + \\euroblock.db
+- Проверка доступности папки и наличия БД
+- Все компьютеры равноправны — нет разделения на основной/клиентский
+- Используется один главный диалог на протяжении всей настройки
+- Корректная работа с grab_set без transient()
 """
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, filedialog
 import os
 import socket
 from config.settings import COLORS, FONTS, PADDING, SIZES
@@ -13,316 +20,265 @@ from config.settings import COLORS, FONTS, PADDING, SIZES
 class SetupWizard:
     """Мастер первоначальной настройки"""
     
-    def __init__(self, parent, config_dir):
-        self.parent = parent
-        self.config_dir = config_dir
-        self.config_file = os.path.join(config_dir, 'network_config.ini')
-        self.marker_file = os.path.join(config_dir, '.first_run_done')
-        
-        self.result = None
-        self.dialog = None
-        
-        self._show_main_question()
+    # Имя файла базы данных (фиксированное)
+    DB_FILENAME = 'euroblock.db'
     
-    def _show_main_question(self):
-        """Шаг 1: Вопрос — это основной компьютер?"""
+    def __init__(self, parent):
+        self.parent = parent
+        self.result = None  # 'configured' или None (отмена)
+        
+        # Определяем папку конфигурации
+        import sys
+        if getattr(sys, 'frozen', False):
+            self.config_dir = os.path.dirname(sys.executable)
+        else:
+            self.config_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        
+        self.config_file = os.path.join(self.config_dir, 'network_config.ini')
+        self.marker_file = os.path.join(self.config_dir, '.first_run_done')
+        
+        # Выбранный путь к БД (для сетевого режима)
+        self.selected_db_path = None
+        
+        self._create_main_dialog()
+        self._show_mode_selection()
+    
+    def _create_main_dialog(self):
+        """Создать главный диалог мастера"""
         self.dialog = tk.Toplevel(self.parent)
         self.dialog.title("Первоначальная настройка")
         self.dialog.configure(bg=COLORS['panel_bg'])
         self.dialog.resizable(False, False)
-        self.dialog.transient(self.parent)
-        self.dialog.grab_set()
         
-        width, height = 550, 350
+        self.dialog_width = 650
+        self.dialog_height = 500
         screen_w = self.dialog.winfo_screenwidth()
         screen_h = self.dialog.winfo_screenheight()
-        x = (screen_w - width) // 2
-        y = (screen_h - height) // 2
-        self.dialog.geometry(f"{width}x{height}+{x}+{y}")
+        x = (screen_w - self.dialog_width) // 2
+        y = (screen_h - self.dialog_height) // 2
+        self.dialog.geometry(f"{self.dialog_width}x{self.dialog_height}+{x}+{y}")
+        
+        self.content_frame = tk.Frame(self.dialog, bg=COLORS['panel_bg'])
+        self.content_frame.pack(fill=tk.BOTH, expand=True)
+        
+        self.dialog.protocol("WM_DELETE_WINDOW", self._on_cancel)
+        
+        # Гарантированное отображение
+        self.dialog.deiconify()
+        self.dialog.lift()
+        self.dialog.attributes('-topmost', True)
+        self.dialog.update()
+        self.dialog.attributes('-topmost', False)
+        self.dialog.focus_force()
+        self.dialog.grab_set()
+    
+    def _clear_content(self):
+        """Очистить содержимое контейнера шагов"""
+        for widget in self.content_frame.winfo_children():
+            widget.destroy()
+    
+    # ========================================================================
+    # ШАГ 1: Выбор режима работы
+    # ========================================================================
+    def _show_mode_selection(self):
+        """Шаг 1: Выбор режима работы"""
+        self._clear_content()
         
         tk.Label(
-            self.dialog,
+            self.content_frame,
             text="Мастер первоначальной настройки",
             font=FONTS['section_title'],
             bg=COLORS['panel_bg'],
             fg=COLORS['title_text']
         ).pack(pady=(20, 10))
         
-        tk.Frame(self.dialog, height=2, bg=COLORS['button_primary']).pack(
+        tk.Frame(self.content_frame, height=2, bg=COLORS['button_primary']).pack(
             fill=tk.X, padx=20, pady=(0, 15)
         )
         
         tk.Label(
-            self.dialog,
-            text="Это основной компьютер,\nна котором будет храниться база данных?",
+            self.content_frame,
+            text="Выберите режим работы программы:",
             font=FONTS['menu'],
             bg=COLORS['panel_bg'],
             fg=COLORS['title_text'],
             justify='center'
-        ).pack(pady=(10, 5))
+        ).pack(pady=(10, 15))
         
-        tk.Label(
-            self.dialog,
-            text="(Основной компьютер должен быть включён,\nчтобы другие пользователи могли работать)",
-            font=FONTS['hint'],
-            bg=COLORS['panel_bg'],
-            fg=COLORS['work_area_text'],
-            justify='center'
-        ).pack(pady=(0, 20))
+        btn_frame = tk.Frame(self.content_frame, bg=COLORS['panel_bg'])
+        btn_frame.pack(fill=tk.X, padx=40, pady=(0, 10))
         
-        btn_frame = tk.Frame(self.dialog, bg=COLORS['panel_bg'])
-        btn_frame.pack(fill=tk.X, padx=40, pady=(0, 20))
-        
-        yes_btn = tk.Button(
+        # Кнопка "Многопользовательский режим"
+        network_btn = tk.Button(
             btn_frame,
-            text="Да, это основной компьютер",
+            text="Многопользовательский режим\n(работа с общей базой данных по сети)",
             font=FONTS['menu'],
-            command=self._on_main_computer,
+            command=self._show_network_setup,
             bg=COLORS['button_primary'],
             fg=COLORS['button_text'],
             relief=tk.FLAT,
             padx=15,
-            pady=8,
-            cursor='hand2'
+            pady=12,
+            cursor='hand2',
+            justify='center'
         )
-        yes_btn.pack(fill=tk.X, pady=(0, 10))
-        yes_btn.bind('<Enter>', lambda e: yes_btn.config(bg=COLORS['button_primary_hover']))
-        yes_btn.bind('<Leave>', lambda e: yes_btn.config(bg=COLORS['button_primary']))
+        network_btn.pack(fill=tk.X, pady=(0, 10))
+        network_btn.bind('<Enter>', lambda e: network_btn.config(bg=COLORS['button_primary_hover']))
+        network_btn.bind('<Leave>', lambda e: network_btn.config(bg=COLORS['button_primary']))
         
-        no_btn = tk.Button(
+        # Кнопка "Локальный режим"
+        local_btn = tk.Button(
             btn_frame,
-            text="Нет, это клиентский компьютер",
+            text="Локальный режим\n(один пользователь, база на этом компьютере)",
             font=FONTS['menu'],
-            command=self._on_client_computer,
+            command=self._save_local_config,
             bg=COLORS['button_settings'],
             fg=COLORS['button_text'],
             relief=tk.FLAT,
             padx=15,
-            pady=8,
-            cursor='hand2'
+            pady=12,
+            cursor='hand2',
+            justify='center'
         )
-        no_btn.pack(fill=tk.X)
-        no_btn.bind('<Enter>', lambda e: no_btn.config(bg=COLORS['button_settings_hover']))
-        no_btn.bind('<Leave>', lambda e: no_btn.config(bg=COLORS['button_settings']))
+        local_btn.pack(fill=tk.X)
+        local_btn.bind('<Enter>', lambda e: local_btn.config(bg=COLORS['button_settings_hover']))
+        local_btn.bind('<Leave>', lambda e: local_btn.config(bg=COLORS['button_settings']))
         
-        self.dialog.protocol("WM_DELETE_WINDOW", self._on_cancel)
-    
-    def _on_main_computer(self):
-        self.dialog.destroy()
-        self._show_main_computer_info()
-    
-    def _on_client_computer(self):
-        self.dialog.destroy()
-        self._show_client_setup()
-    
-    def _on_cancel(self):
-        self.result = None
-        self.dialog.destroy()
-    
-    def _show_main_computer_info(self):
-        """Шаг 2А: Показать информацию о основном компьютере"""
-        self.dialog = tk.Toplevel(self.parent)
-        self.dialog.title("Основной компьютер — информация")
-        self.dialog.configure(bg=COLORS['panel_bg'])
-        self.dialog.resizable(False, False)
-        self.dialog.transient(self.parent)
-        self.dialog.grab_set()
-        
-        width, height = 600, 450
-        screen_w = self.dialog.winfo_screenwidth()
-        screen_h = self.dialog.winfo_screenheight()
-        x = (screen_w - width) // 2
-        y = (screen_h - height) // 2
-        self.dialog.geometry(f"{width}x{height}+{x}+{y}")
-        
+        # Подсказка
         tk.Label(
-            self.dialog,
-            text="Настройка основного компьютера",
-            font=FONTS['section_title'],
-            bg=COLORS['panel_bg'],
-            fg=COLORS['title_text']
-        ).pack(pady=(20, 10))
-        
-        tk.Frame(self.dialog, height=2, bg=COLORS['button_primary']).pack(
-            fill=tk.X, padx=20, pady=(0, 15)
-        )
-        
-        local_ip = self._get_local_ip()
-        computer_name = socket.gethostname()
-        db_path = os.path.join(self.config_dir, 'euroblock.db')
-        network_path = f"\\\\{computer_name}\\{os.path.basename(self.config_dir)}\\euroblock.db"
-        
-        info_frame = tk.Frame(self.dialog, bg=COLORS['panel_bg'])
-        info_frame.pack(fill=tk.X, padx=30, pady=(10, 10))
-        
-        def add_info_row(label, value):
-            row = tk.Frame(info_frame, bg=COLORS['panel_bg'])
-            row.pack(fill=tk.X, pady=3)
-            tk.Label(
-                row, text=f"{label}:",
-                font=FONTS['field'],
-                bg=COLORS['panel_bg'],
-                fg=COLORS['work_area_text'],
-                width=20, anchor='w'
-            ).pack(side=tk.LEFT)
-            
-            value_text = tk.Text(
-                row, font=FONTS['field'],
-                bg=COLORS['panel_bg'],
-                fg=COLORS['title_text'],
-                height=1, wrap='none',
-                relief=tk.FLAT, bd=0
-            )
-            value_text.insert('1.0', value)
-            value_text.config(state='disabled')
-            value_text.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        
-        add_info_row("Имя компьютера", computer_name)
-        add_info_row("IP-адрес", local_ip)
-        add_info_row("Путь к БД (локально)", db_path)
-        add_info_row("Путь для клиентов", network_path)
-        
-        tk.Label(
-            self.dialog,
-            text="Инструкция:",
-            font=FONTS['field'],
-            bg=COLORS['panel_bg'],
-            fg=COLORS['title_text'],
-            anchor='w'
-        ).pack(fill=tk.X, padx=30, pady=(15, 5))
-        
-        instructions = (
-            "1. Создайте общую папку с программой\n"
-            "2. Дайте всем пользователям права чтения/записи\n"
-            "3. На клиентских компьютерах выберите\n"
-            "   «Нет, это клиентский компьютер»\n"
-            "4. Введите путь: " + network_path
-        )
-        
-        tk.Label(
-            self.dialog,
-            text=instructions,
+            self.content_frame,
+            text="Режим можно изменить позже, удалив файл network_config.ini",
             font=FONTS['hint'],
             bg=COLORS['panel_bg'],
             fg=COLORS['work_area_text'],
-            justify='left',
-            anchor='w'
-        ).pack(fill=tk.X, padx=30)
-        
-        btn_frame = tk.Frame(self.dialog, bg=COLORS['panel_bg'])
-        btn_frame.pack(fill=tk.X, padx=30, pady=(20, 20))
-        
-        done_btn = tk.Button(
-            btn_frame,
-            text="Готово — сохранить настройки",
-            font=FONTS['menu'],
-            command=lambda: self._save_main_config(db_path),
-            bg=COLORS['button_primary'],
-            fg=COLORS['button_text'],
-            relief=tk.FLAT,
-            padx=15,
-            pady=8,
-            cursor='hand2'
-        )
-        done_btn.pack(fill=tk.X)
-        done_btn.bind('<Enter>', lambda e: done_btn.config(bg=COLORS['button_primary_hover']))
-        done_btn.bind('<Leave>', lambda e: done_btn.config(bg=COLORS['button_primary']))
-        
-        self.dialog.protocol("WM_DELETE_WINDOW", self._on_cancel)
+            justify='center'
+        ).pack(pady=(15, 0))
     
-    def _show_client_setup(self):
-        """Шаг 2Б: Ввод данных основного компьютера"""
-        self.dialog = tk.Toplevel(self.parent)
-        self.dialog.title("Подключение к основному компьютеру")
-        self.dialog.configure(bg=COLORS['panel_bg'])
-        self.dialog.resizable(False, False)
-        self.dialog.transient(self.parent)
-        self.dialog.grab_set()
-        
-        width, height = 550, 380
-        screen_w = self.dialog.winfo_screenwidth()
-        screen_h = self.dialog.winfo_screenheight()
-        x = (screen_w - width) // 2
-        y = (screen_h - height) // 2
-        self.dialog.geometry(f"{width}x{height}+{x}+{y}")
+    # ========================================================================
+    # ШАГ 2: Выбор сетевой папки через диалог
+    # ========================================================================
+    def _show_network_setup(self):
+        """Шаг 2: Выбор сетевой папки через диалог"""
+        self._clear_content()
         
         tk.Label(
-            self.dialog,
-            text="Подключение к основному компьютеру",
+            self.content_frame,
+            text="Настройка многопользовательского режима",
             font=FONTS['section_title'],
             bg=COLORS['panel_bg'],
             fg=COLORS['title_text']
         ).pack(pady=(20, 10))
         
-        tk.Frame(self.dialog, height=2, bg=COLORS['button_primary']).pack(
+        tk.Frame(self.content_frame, height=2, bg=COLORS['button_primary']).pack(
             fill=tk.X, padx=20, pady=(0, 15)
         )
         
         tk.Label(
-            self.dialog,
-            text="Введите путь к базе данных на основном компьютере.\n"
-                 "Попросите эти данные у администратора основного компьютера.",
+            self.content_frame,
+            text="Выберите сетевую папку, в которой будет храниться общая база данных.\n"
+                 "Все пользователи программы будут работать с этой БД.",
             font=FONTS['hint'],
             bg=COLORS['panel_bg'],
             fg=COLORS['work_area_text'],
             justify='center'
         ).pack(pady=(0, 15))
         
-        input_frame = tk.Frame(self.dialog, bg=COLORS['panel_bg'])
-        input_frame.pack(fill=tk.X, padx=30, pady=(0, 10))
+        # ===== Поле пути =====
+        path_frame = tk.Frame(self.content_frame, bg=COLORS['panel_bg'])
+        path_frame.pack(fill=tk.X, padx=30, pady=(0, 5))
         
         tk.Label(
-            input_frame,
-            text="Путь к базе данных:",
+            path_frame,
+            text="Путь к общей базе данных:",
             font=FONTS['field'],
             bg=COLORS['panel_bg'],
             fg=COLORS['title_text'],
             anchor='w'
         ).pack(fill=tk.X, pady=(0, 5))
         
+        # Поле ввода (read-only) + кнопка "Обзор"
+        entry_frame = tk.Frame(path_frame, bg=COLORS['panel_bg'])
+        entry_frame.pack(fill=tk.X)
+        
         self.path_entry = tk.Entry(
-            input_frame,
+            entry_frame,
             font=FONTS['field'],
             relief=tk.SOLID,
-            bd=1
+            bd=1,
+            state='readonly',
+            readonlybackground='#f5f5f5'
         )
-        self.path_entry.pack(fill=tk.X, ipady=5)
-        self.path_entry.insert(0, "\\\\ИМЯ_КОМПЬЮТЕРА\\Общая_папка\\euroblock.db")
-        self.path_entry.bind('<FocusIn>', self._on_path_focus)
+        self.path_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=5)
         
-        tk.Label(
-            self.dialog,
-            text="Пример: \\\\OFFICE-PC\\Euroblock\\euroblock.db",
+        browse_btn = tk.Button(
+            entry_frame,
+            text="Обзор...",
+            font=FONTS['field'],
+            command=self._browse_folder,
+            bg=COLORS['button_primary'],
+            fg=COLORS['button_text'],
+            relief=tk.FLAT,
+            padx=10,
+            cursor='hand2'
+        )
+        browse_btn.pack(side=tk.RIGHT, padx=(5, 0))
+        browse_btn.bind('<Enter>', lambda e: browse_btn.config(bg=COLORS['button_primary_hover']))
+        browse_btn.bind('<Leave>', lambda e: browse_btn.config(bg=COLORS['button_primary']))
+        
+        # ===== Статус папки =====
+        self.status_frame = tk.Frame(self.content_frame, bg=COLORS['panel_bg'])
+        self.status_frame.pack(fill=tk.X, padx=30, pady=(10, 10))
+        
+        self.status_label = tk.Label(
+            self.status_frame,
+            text="Папка не выбрана",
             font=FONTS['hint'],
             bg=COLORS['panel_bg'],
             fg=COLORS['work_area_text'],
+            anchor='w',
+            justify='left'
+        )
+        self.status_label.pack(fill=tk.X)
+        
+        # ===== Подсказки =====
+        tk.Label(
+            self.content_frame,
+            text="Советы:\n"
+                 "• В диалоге выбора можно открыть «Сеть» и выбрать нужный компьютер\n"
+                 "• Папка должна быть открыта для чтения/записи всем пользователям\n"
+                 "• Если БД в папке уже есть — программа подключится к ней\n"
+                 "• Если БД нет — она будет создана при первом запуске",
+            font=FONTS['hint'],
+            bg=COLORS['panel_bg'],
+            fg=COLORS['work_area_text'],
+            justify='left',
             anchor='w'
         ).pack(fill=tk.X, padx=30, pady=(5, 15))
         
-        btn_frame = tk.Frame(self.dialog, bg=COLORS['panel_bg'])
+        # ===== Кнопки =====
+        btn_frame = tk.Frame(self.content_frame, bg=COLORS['panel_bg'])
         btn_frame.pack(fill=tk.X, padx=30, pady=(0, 20))
         
-        connect_btn = tk.Button(
+        self.connect_btn = tk.Button(
             btn_frame,
             text="Подключиться",
             font=FONTS['menu'],
             command=self._on_connect,
-            bg=COLORS['button_primary'],
+            bg=COLORS['button_disabled'],
             fg=COLORS['button_text'],
             relief=tk.FLAT,
             padx=15,
             pady=8,
-            cursor='hand2'
+            cursor='hand2',
+            state='disabled'
         )
-        connect_btn.pack(fill=tk.X, pady=(0, 10))
-        connect_btn.bind('<Enter>', lambda e: connect_btn.config(bg=COLORS['button_primary_hover']))
-        connect_btn.bind('<Leave>', lambda e: connect_btn.config(bg=COLORS['button_primary']))
+        self.connect_btn.pack(fill=tk.X, pady=(0, 10))
         
-        cancel_btn = tk.Button(
+        back_btn = tk.Button(
             btn_frame,
-            text="Отмена",
+            text="← Назад",
             font=FONTS['menu'],
-            command=self._on_cancel,
+            command=self._show_mode_selection,
             bg=COLORS['button_settings'],
             fg=COLORS['button_text'],
             relief=tk.FLAT,
@@ -330,47 +286,138 @@ class SetupWizard:
             pady=8,
             cursor='hand2'
         )
-        cancel_btn.pack(fill=tk.X)
-        cancel_btn.bind('<Enter>', lambda e: cancel_btn.config(bg=COLORS['button_settings_hover']))
-        cancel_btn.bind('<Leave>', lambda e: cancel_btn.config(bg=COLORS['button_settings']))
-        
-        self.dialog.protocol("WM_DELETE_WINDOW", self._on_cancel)
+        back_btn.pack(fill=tk.X)
+        back_btn.bind('<Enter>', lambda e: back_btn.config(bg=COLORS['button_settings_hover']))
+        back_btn.bind('<Leave>', lambda e: back_btn.config(bg=COLORS['button_settings']))
     
-    def _on_path_focus(self, event):
-        if self.path_entry.get().startswith("\\\\ИМЯ_"):
-            self.path_entry.delete(0, tk.END)
+    def _browse_folder(self):
+        """Открыть диалог выбора папки"""
+        # Открываем диалог выбора папки
+        folder_path = filedialog.askdirectory(
+            parent=self.dialog,
+            title="Выберите сетевую папку для базы данных",
+            initialdir='\\\\',  # Начинаем с сетевого окружения
+            mustexist=False  # Папка может не существовать — создадим
+        )
+        
+        if not folder_path:
+            # Пользователь отменил выбор
+            return
+        
+        # Нормализуем путь
+        folder_path = os.path.normpath(folder_path)
+        
+        # Формируем полный путь к БД
+        db_path = os.path.join(folder_path, self.DB_FILENAME)
+        
+        # Сохраняем выбранный путь
+        self.selected_db_path = db_path
+        
+        # Отображаем путь в поле
+        self.path_entry.config(state='normal')
+        self.path_entry.delete(0, tk.END)
+        self.path_entry.insert(0, db_path)
+        self.path_entry.config(state='readonly')
+        
+        # Проверяем папку и обновляем статус
+        self._check_folder_status(folder_path)
+    
+    def _check_folder_status(self, folder_path):
+        """Проверить статус папки и обновить индикатор"""
+        # Проверяем доступность папки
+        if not os.path.exists(folder_path):
+            self._set_status(
+                f"⚠ Папка не существует: {folder_path}\n"
+                f"База данных будет создана при первом запуске.",
+                COLORS['msg_icon_warning']
+            )
+            self._enable_connect_button()
+            return
+        
+        # Проверяем возможность записи
+        test_file = os.path.join(folder_path, '.write_test_temp')
+        try:
+            with open(test_file, 'w', encoding='utf-8') as f:
+                f.write('test')
+            os.remove(test_file)
+            can_write = True
+        except Exception:
+            can_write = False
+        
+        if not can_write:
+            self._set_status(
+                f"✗ Нет прав на запись в папку:\n{folder_path}\n"
+                f"Обратитесь к администратору для предоставления прав.",
+                COLORS['msg_icon_error']
+            )
+            self.connect_btn.config(state='disabled', bg=COLORS['button_disabled'])
+            return
+        
+        # Проверяем наличие БД
+        db_path = os.path.join(folder_path, self.DB_FILENAME)
+        if os.path.exists(db_path):
+            size_mb = os.path.getsize(db_path) / (1024 * 1024)
+            self._set_status(
+                f"✓ Папка доступна. База данных найдена ({size_mb:.2f} МБ).\n"
+                f"Программа подключится к существующей БД.",
+                COLORS['msg_icon_info']
+            )
+        else:
+            self._set_status(
+                f"✓ Папка доступна. База данных будет создана при первом запуске.",
+                COLORS['msg_icon_info']
+            )
+        
+        self._enable_connect_button()
+    
+    def _set_status(self, text, color):
+        """Обновить статус-лейбл"""
+        self.status_label.config(text=text, fg=color)
+    
+    def _enable_connect_button(self):
+        """Активировать кнопку подключения"""
+        self.connect_btn.config(state='normal', bg=COLORS['button_primary'])
+        self.connect_btn.bind('<Enter>', lambda e: self.connect_btn.config(bg=COLORS['button_primary_hover']))
+        self.connect_btn.bind('<Leave>', lambda e: self.connect_btn.config(bg=COLORS['button_primary']))
     
     def _on_connect(self):
-        path = self.path_entry.get().strip()
-        
-        if not path:
-            messagebox.showwarning("Внимание", "Введите путь к базе данных")
-            return
-        
-        if not path.lower().endswith('.db'):
+        """Обработка нажатия кнопки «Подключиться»"""
+        if not self.selected_db_path:
             messagebox.showwarning(
                 "Внимание",
-                "Путь должен заканчиваться на .db\n"
-                "Пример: \\\\SERVER\\Share\\euroblock.db"
+                "Сначала выберите папку",
+                parent=self.dialog
             )
             return
         
-        db_dir = os.path.dirname(path)
-        if not os.path.exists(db_dir):
-            result = messagebox.askyesno(
-                "Папка недоступна",
-                f"Папка не найдена:\n{db_dir}\n\n"
-                f"Основной компьютер выключен или папка недоступна.\n"
-                f"Сохранить настройки и продолжить?"
-            )
-            if not result:
+        # Дополнительная проверка перед сохранением
+        folder_path = os.path.dirname(self.selected_db_path)
+        
+        if os.path.exists(folder_path):
+            # Проверяем возможность записи
+            test_file = os.path.join(folder_path, '.write_test_temp')
+            try:
+                with open(test_file, 'w', encoding='utf-8') as f:
+                    f.write('test')
+                os.remove(test_file)
+            except Exception:
+                messagebox.showerror(
+                    "Ошибка",
+                    f"Нет прав на запись в папку:\n{folder_path}",
+                    parent=self.dialog
+                )
                 return
         
-        self._save_client_config(path)
+        # Сохраняем конфигурацию
+        self._save_network_config(self.selected_db_path)
     
-    def _save_main_config(self, db_path):
-        """Сохранить конфигурацию для основного компьютера"""
+    # ========================================================================
+    # Сохранение конфигурации
+    # ========================================================================
+    def _save_local_config(self):
+        """Сохранить конфигурацию для локального режима"""
         try:
+            db_path = os.path.join(self.config_dir, self.DB_FILENAME)
             config_content = f"""# Конфигурация многопользовательского режима
 # Создано мастером настройки
 
@@ -387,20 +434,28 @@ is_main = true
             with open(self.marker_file, 'w', encoding='utf-8') as f:
                 f.write('done')
             
-            self.result = 'main'
+            self.result = 'configured'
+            
+            try:
+                self.dialog.grab_release()
+            except tk.TclError:
+                pass
             self.dialog.destroy()
             
             messagebox.showinfo(
                 "Настройка завершена",
-                "Конфигурация основного компьютера сохранена.\n\n"
-                "Теперь другие компьютеры могут подключаться к этому."
+                "Локальный режим сохранён.\n\n"
+                "Программа будет работать с локальной базой данных."
             )
         except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось сохранить настройки:\n{e}")
+            messagebox.showerror("Ошибка", f"Не удалось сохранить настройки:\n{e}", parent=self.dialog)
     
-    def _save_client_config(self, network_path):
-        """Сохранить конфигурацию для клиентского компьютера"""
+    def _save_network_config(self, network_path):
+        """Сохранить конфигурацию для сетевого режима"""
         try:
+            # Нормализуем путь для корректного отображения
+            normalized_path = os.path.normpath(network_path)
+            
             config_content = f"""# Конфигурация многопользовательского режима
 # Создано мастером настройки
 
@@ -408,7 +463,7 @@ is_main = true
 mode = network
 
 [network]
-db_path = {network_path}
+db_path = {normalized_path}
 busy_timeout = 30
 check_interval = 2
 is_main = false
@@ -419,41 +474,73 @@ is_main = false
             with open(self.marker_file, 'w', encoding='utf-8') as f:
                 f.write('done')
             
-            self.result = 'client'
+            self.result = 'configured'
+            
+            try:
+                self.dialog.grab_release()
+            except tk.TclError:
+                pass
             self.dialog.destroy()
             
             messagebox.showinfo(
                 "Настройка завершена",
-                f"Конфигурация клиента сохранена.\n\n"
-                f"Путь к БД: {network_path}\n\n"
-                "При следующем запуске подключение произойдёт автоматически."
+                f"Многопользовательский режим сохранён.\n\n"
+                f"Путь к общей БД:\n{normalized_path}\n\n"
+                f"Все пользователи программы будут работать с этой базой данных.\n"
+                f"При следующем запуске подключение произойдёт автоматически."
             )
         except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось сохранить настройки:\n{e}")
+            messagebox.showerror("Ошибка", f"Не удалось сохранить настройки:\n{e}", parent=self.dialog)
     
-    def _get_local_ip(self):
-        """Получить локальный IP-адрес компьютера"""
+    def _on_cancel(self):
+        """Отмена настройки"""
+        self.result = None
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            ip = s.getsockname()[0]
-            s.close()
-            return ip
-        except Exception:
-            return "127.0.0.1"
+            self.dialog.grab_release()
+        except tk.TclError:
+            pass
+        self.dialog.destroy()
+        try:
+            self.parent.quit()
+        except tk.TclError:
+            pass
     
     def get_result(self):
+        """Получить результат настройки"""
         return self.result
 
 
 def is_first_run(config_dir):
-    """Проверить, является ли это первым запуском программы"""
+    """
+    Проверить, является ли это первым запуском программы.
+    
+    Args:
+        config_dir: папка с конфигурацией
+    
+    Returns:
+        True, если это первый запуск (нет маркера)
+    """
     marker_file = os.path.join(config_dir, '.first_run_done')
     return not os.path.exists(marker_file)
 
 
-def run_setup_wizard(parent, config_dir):
-    """Запустить мастер настройки"""
-    wizard = SetupWizard(parent, config_dir)
-    parent.wait_window(wizard.dialog)
+def run_setup_wizard(parent, config_dir=None):
+    """
+    Запустить мастер настройки.
+    
+    Args:
+        parent: родительское окно (root)
+        config_dir: папка с конфигурацией (не используется, но оставлено для совместимости)
+    
+    Returns:
+        'configured' — если настройка прошла успешно
+        None — если настройка отменена
+    """
+    wizard = SetupWizard(parent)
+    
+    try:
+        parent.mainloop()
+    except tk.TclError:
+        pass
+    
     return wizard.get_result()

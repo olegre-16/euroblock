@@ -860,3 +860,14 @@ class SalesReportWindow(BaseToplevelWindow):
             except:
                 pass
             messagebox.showerror("Ошибка", f"Не удалось сформировать сводный отчет (цвет):\n\n{e}")
+
+
+    def _on_auto_refresh(self):
+        """
+        Автообновление данных при изменении БД другим компьютером.
+        Вызывается таймером из BaseToplevelWindow каждые 3 секунды.
+        """
+        try:
+            self.load_sales()
+        except Exception as e:
+            print(f"⚠ Ошибка автообновления в SalesReportWindow: {e}")

@@ -2068,45 +2068,92 @@ class CashRepository:
         finally:
             conn.close()
     
-    def clear_field(self, operation_id, field):
-        """Обнулить конкретное поле (income или expense) в записи."""
-        if field not in ('income', 'expense'):
-            return False, "Некорректное имя поля"
+    def clear_field(self, operation_id, field_type):
+        """
+        Обнулить конкретное поле (приход или расход) в записи кассовой операции.
+        [ИЗМЕНЕНО] Теперь обнуляет только выбранное поле, а не удаляет всю запись.
+        Если после обнуления оба поля становятся 0 — запись удаляется полностью.
+        
+        Args:
+            operation_id: ID записи в таблице cash_operations
+            field_type: 'income' или 'expense' — какое поле обнулить
+        
+        Returns:
+            (success, message)
+        """
+        if field_type not in ('income', 'expense'):
+            return False, f"Неверный тип поля: {field_type}"
+        
         conn = get_connection()
         cursor = conn.cursor()
         try:
-            cursor.execute(f'''
-                SELECT income, expense FROM {self.table_name} WHERE id = ?
-            ''', (operation_id,))
+            # 1. Проверяем, существует ли запись
+            cursor.execute(
+                f'SELECT income, expense FROM {self.table_name} WHERE id = ?',
+                (operation_id,)
+            )
             row = cursor.fetchone()
             if not row:
                 return False, "Запись не найдена"
+            
             current_income, current_expense = row
-            if field == 'income':
+            
+            # 2. Определяем новое значение поля
+            if field_type == 'income':
                 new_income = 0
-                new_expense = current_expense or 0
+                new_expense = current_expense
+                field_name = "Приход"
             else:
-                new_income = current_income or 0
+                new_income = current_income
                 new_expense = 0
+                field_name = "Расход"
+            
+            # 3. Если ОБА поля станут 0 — удаляем запись полностью
             if new_income == 0 and new_expense == 0:
-                cursor.execute(f'DELETE FROM {self.table_name} WHERE id = ?', (operation_id,))
+                cursor.execute(
+                    f'DELETE FROM {self.table_name} WHERE id = ?',
+                    (operation_id,)
+                )
                 conn.commit()
-                return True, "Запись удалена (оба значения были обнулены)"
-            else:
-                cursor.execute(f'''
-                    UPDATE {self.table_name}
+                return True, f"{field_name} обнулён. Запись удалена."
+            
+            # 4. Иначе — обнуляем только выбранное поле
+            cursor.execute(
+                f'''UPDATE {self.table_name} 
                     SET income = ?, expense = ?
-                    WHERE id = ?
-                ''', (new_income, new_expense, operation_id))
-                conn.commit()
-                field_name = "приход" if field == 'income' else "расход"
-                return True, f"Значение '{field_name}' обнулено"
+                    WHERE id = ?''',
+                (new_income, new_expense, operation_id)
+            )
+            conn.commit()
+            
+            # Определяем, что осталось
+            remaining_field = "расход" if field_type == 'income' else "приход"
+            remaining_value = new_expense if field_type == 'income' else new_income
+            
+            if remaining_value and remaining_value > 0:
+                message = f"{field_name} обнулён. {remaining_field.capitalize()} ({self._format_money(remaining_value)} руб.) сохранён."
+            else:
+                message = f"{field_name} обнулён."
+            
+            return True, message
         except Exception as e:
             conn.rollback()
-            return False, f"Ошибка обновления: {e}"
+            return False, f"Ошибка обнуления поля: {e}"
         finally:
             conn.close()
     
+    def _format_money(self, value):
+        """Вспомогательный метод для форматирования суммы"""
+        if value is None or value == '':
+            return '0'
+        try:
+            num = float(value)
+            if num.is_integer():
+                return str(int(num))
+            else:
+                return f"{num:.2f}".rstrip('0').rstrip('.')
+        except (ValueError, TypeError):
+            return str(value)    
     def get_daily_totals(self):
         """Получить итоги по дням."""
         conn = get_connection()

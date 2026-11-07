@@ -380,3 +380,13 @@ class SalesWindow(BaseToplevelWindow):
             messagebox.showinfo("Успех", message)
         else:
             messagebox.showerror("Ошибка", message)
+
+    def _on_auto_refresh(self):
+        """
+        Автообновление данных при изменении БД другим компьютером.
+        Вызывается таймером из BaseToplevelWindow каждые 3 секунды.
+        """
+        try:
+            self.load_sales()
+        except Exception as e:
+            print(f"⚠ Ошибка автообновления в SalesWindow: {e}")

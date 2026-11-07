@@ -582,3 +582,13 @@ class ExpensesReportWindow(BaseToplevelWindow):
             elements.append(Spacer(1, 0.2*cm))
         
         return elements
+
+    def _on_auto_refresh(self):
+        """
+        Автообновление данных при изменении БД другим компьютером.
+        Вызывается таймером из BaseToplevelWindow каждые 3 секунды.
+        """
+        try:
+            self.load_expenses()
+        except Exception as e:
+            print(f"⚠ Ошибка автообновления в ExpensesReportWindow: {e}")

@@ -311,3 +311,14 @@ class BaseDictionaryWindow:
                 names = names[1:]
         
         return names
+
+    def _on_auto_refresh(self):
+        """
+        Автообновление данных при изменении БД другим компьютером.
+        Вызывается таймером из BaseToplevelWindow каждые 3 секунды.
+        Применяется ко всем окнам справочников.
+        """
+        try:
+            self.load_data()
+        except Exception as e:
+            print(f"⚠ Ошибка автообновления в BaseDictionaryWindow: {e}")

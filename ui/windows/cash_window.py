@@ -328,6 +328,10 @@ class CashWindow(BaseToplevelWindow):
         self._update_total_balance()
     
     def delete_selected_cell(self):
+        """
+        Удалить выбранное значение (приход или расход) из таблицы.
+        [ИЗМЕНЕНО] Корректная обработка записей с обоими значениями.
+        """
         selected = self.tree.selection()
         if not selected:
             self.show_warning("Внимание", "Выберите ячейку для удаления")
@@ -362,8 +366,10 @@ class CashWindow(BaseToplevelWindow):
             self.show_warning("Внимание", "В выбранной строке нет значений для удаления")
             return
         
+        # Определяем, что нужно удалить
         target_type = None
         if has_income and has_expense:
+            # В строке и приход, и расход — спрашиваем пользователя
             target_type = self._ask_what_to_delete(income_val_str, expense_val_str)
             if target_type is None:
                 return
@@ -372,20 +378,26 @@ class CashWindow(BaseToplevelWindow):
         elif has_expense:
             target_type = 'expense'
         
+        # [ИЗМЕНЕНО] Ищем запись в БД по дате и значению
         all_ops = cash_repo.get_all()
         day_ops = [op for op in all_ops if op[1] == actual_date]
         
         target_op_id = None
         target_desc = ""
+        
         if target_type == 'income':
+            # Ищем запись, где income совпадает с выбранным значением
             for op in day_ops:
-                if op[2] and abs(op[2] - inc_float) < 0.01:
+                op_income = op[2]
+                if op_income and abs(op_income - inc_float) < 0.01:
                     target_op_id = op[0]
                     target_desc = f"Приход: {income_val_str} руб."
                     break
         elif target_type == 'expense':
+            # Ищем запись, где expense совпадает с выбранным значением
             for op in day_ops:
-                if op[3] and abs(op[3] - exp_float) < 0.01:
+                op_expense = op[3]
+                if op_expense and abs(op_expense - exp_float) < 0.01:
                     target_op_id = op[0]
                     target_desc = f"Расход: {expense_val_str} руб."
                     break
@@ -394,13 +406,16 @@ class CashWindow(BaseToplevelWindow):
             self.show_error("Ошибка", "Не найдена запись для удаления")
             return
         
+        # Подтверждение
         if not self.ask_yes_no(
             "Подтверждение",
             f"Удалить значение?\n\nДата: {actual_date}\n{target_desc}"
         ):
             return
         
+        # [ИЗМЕНЕНО] Вызываем clear_field, который теперь обнуляет только выбранное поле
         success, message = cash_repo.clear_field(target_op_id, target_type)
+        
         if success:
             self.load_operations()
             self.show_info("Успех", message)
@@ -408,7 +423,8 @@ class CashWindow(BaseToplevelWindow):
         else:
             self.show_error("Ошибка", message)
             self._restore_window_state()
-    
+            
+                
     def _get_date_from_group(self, item_id):
         children = self.tree.get_children()
         idx = list(children).index(item_id)
@@ -527,3 +543,13 @@ class CashWindow(BaseToplevelWindow):
         dialog.bind('<Escape>', lambda e: on_cancel())
         self.window.wait_window(dialog)
         return result['choice']
+
+    def _on_auto_refresh(self):
+        """
+        Автообновление данных при изменении БД другим компьютером.
+        Вызывается таймером из BaseToplevelWindow каждые 3 секунды.
+        """
+        try:
+            self.load_operations()
+        except Exception as e:
+            print(f"⚠ Ошибка автообновления в CashWindow: {e}")
