@@ -1,11 +1,10 @@
 """
 Главное окно программы "ООО Евроблок".
 [ИЗМЕНЕНО]
-- Исправлен расчёт резерва в таблице "Склад"
-- Теперь резерв = сумма всех резервов - сумма реализаций из резерва
-- Обычные продажи = все продажи - продажи из резерва
-- Склад = произведено + корректировки - обычные продажи
-- Остаток = Склад - Резерв
+- Добавлена табличная часть "Просроченный резерв" под таблицей "Склад"
+- Автоматическое заполнение просроченных резервов (дата конца прошла + есть остаток)
+- Высота блока — фиксированная (примерно 2/3 от блока "Силоса")
+- Автообновление в сетевом режиме
 """
 import os
 import tkinter as tk
@@ -271,6 +270,9 @@ class EuroblockApp:
             finally:
                 self.current_window = None
     
+    # ========================================================================
+    # [ИЗМЕНЕНО] show_welcome() — добавлен блок "Просроченный резерв"
+    # ========================================================================
     def show_welcome(self):
         self.clear_work_area()
         
@@ -283,7 +285,9 @@ class EuroblockApp:
         right_half = tk.Frame(welcome_container, bg=COLORS['background'])
         right_half.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
+        # ====================================================================
         # БЛОК 1: Склад
+        # ====================================================================
         warehouse_frame = tk.Frame(
             left_half, bg=COLORS['panel_bg'],
             relief=tk.RAISED, bd=SIZES['panel_border']
@@ -324,7 +328,54 @@ class EuroblockApp:
         
         self.load_warehouse_data()
         
-        # БЛОК 2: Силоса
+        # ====================================================================
+        # [НОВОЕ] БЛОК 2: Просроченный резерв
+        # ====================================================================
+        overdue_frame = tk.Frame(
+            left_half, bg=COLORS['panel_bg'],
+            relief=tk.RAISED, bd=SIZES['panel_border'],
+            height=180  # Фиксированная высота (~2/3 от блока силосов)
+        )
+        overdue_frame.pack(fill=tk.X, pady=(10, 0))
+        overdue_frame.pack_propagate(False)  # Запрещаем автоматическое изменение размера
+        
+        tk.Label(
+            overdue_frame, text="Просроченный резерв",
+            font=FONTS['section_title'], bg=COLORS['panel_bg'], fg='#c0392b'  # Красный цвет заголовка
+        ).pack(pady=(8, 3), anchor='w', padx=10)
+        
+        overdue_tree_container = tk.Frame(overdue_frame, bg=COLORS['panel_bg'])
+        overdue_tree_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 8))
+        
+        overdue_scrollbar_y = ttk.Scrollbar(overdue_tree_container, orient=tk.VERTICAL)
+        overdue_scrollbar_y.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.overdue_tree = ttk.Treeview(
+            overdue_tree_container,
+            columns=('end_date', 'product', 'color', 'quantity', 'customer'),
+            show='headings', yscrollcommand=overdue_scrollbar_y.set, selectmode='browse'
+        )
+        self.overdue_tree.heading('end_date', text='Дата', anchor='w')
+        self.overdue_tree.heading('product', text='Продукция', anchor='w')
+        self.overdue_tree.heading('color', text='Цвет', anchor='w')
+        self.overdue_tree.heading('quantity', text='Кол-во, шт/м2', anchor='w')
+        self.overdue_tree.heading('customer', text='Заказчик', anchor='w')
+        self.overdue_tree.column('end_date', width=90, anchor='w')
+        self.overdue_tree.column('product', width=180, anchor='w')
+        self.overdue_tree.column('color', width=80, anchor='w')
+        self.overdue_tree.column('quantity', width=100, anchor='w')
+        self.overdue_tree.column('customer', width=130, anchor='w')
+        overdue_scrollbar_y.config(command=self.overdue_tree.yview)
+        self.overdue_tree.pack(fill=tk.BOTH, expand=True)
+        
+        # Подсветка просроченных резервов — светло-красный фон
+        self.overdue_tree.tag_configure('overdue', background='#fadbd8')
+        
+        self.load_overdue_reservations()
+        
+        # ====================================================================
+        # БЛОК 3: Силоса
+        # ====================================================================
         silos_frame = tk.Frame(
             right_half, bg=COLORS['panel_bg'],
             relief=tk.RAISED, bd=SIZES['panel_border']
@@ -344,7 +395,9 @@ class EuroblockApp:
         self.silos_canvas = SiloCanvas(self.silos_canvas_container, silos_data, balances)
         self.silos_canvas.pack(side=tk.LEFT, fill=tk.X, expand=True)
         
-        # БЛОК 3: Производство
+        # ====================================================================
+        # БЛОК 4: Производство
+        # ====================================================================
         prod_frame = tk.Frame(
             right_half, bg=COLORS['panel_bg'],
             relief=tk.RAISED, bd=SIZES['panel_border']
@@ -383,6 +436,107 @@ class EuroblockApp:
         self.load_production_summary()
         
         self._start_main_auto_refresh()
+    
+    # ========================================================================
+    # [НОВОЕ] Загрузка просроченных резервов
+    # ========================================================================
+    def load_overdue_reservations(self):
+        """
+        Загрузить в таблицу просроченные резервы.
+        
+        Просроченный резерв — это резерв, у которого:
+        1. Дата конца (end_date) уже прошла (меньше текущей даты)
+        2. Есть нереализованный остаток (quantity - sold_sum > 0)
+        
+        В колонке "Количество" показывается остаток на текущий момент.
+        """
+        for item in self.overdue_tree.get_children():
+            self.overdue_tree.delete(item)
+        
+        try:
+            # Получаем текущую дату
+            today = datetime.now()
+            today_str = today.strftime('%d.%m.%Y')
+            today_sortable = self._date_to_sortable(today_str)
+            
+            # Получаем все резервы
+            records = reserved_products_repo.get_all_reserved()
+            if not records:
+                return
+            
+            # Получаем историю всех реализаций
+            all_sales = reserved_products_repo.get_all_reserve_sales()
+            
+            # Собираем просроченные резервы
+            overdue_list = []
+            
+            for row in records:
+                try:
+                    if len(row) >= 7:
+                        res_id, start_date, end_date, product, color, quantity, customer = row[:7]
+                    elif len(row) >= 6:
+                        res_id, start_date, end_date, product, color, quantity = row[:6]
+                        customer = ''
+                    else:
+                        continue
+                    
+                    # Проверяем, прошла ли дата конца
+                    end_sortable = self._date_to_sortable(end_date)
+                    if end_sortable >= today_sortable:
+                        # Дата конца ещё не прошла — резерв актуален
+                        continue
+                    
+                    # Считаем остаток
+                    sales_history = all_sales.get(res_id, [])
+                    sold_sum = sum(qty for _, qty in sales_history) if sales_history else 0
+                    remaining = quantity - sold_sum
+                    
+                    # Если остаток <= 0 — резерв полностью реализован, не показываем
+                    if remaining <= 0:
+                        continue
+                    
+                    # Это просроченный резерв с остатком
+                    overdue_list.append({
+                        'end_date': end_date,
+                        'end_sortable': end_sortable,
+                        'product': product,
+                        'color': color,
+                        'remaining': remaining,
+                        'customer': customer
+                    })
+                except Exception as e:
+                    print(f"⚠ Ошибка обработки записи резерва {row}: {e}")
+                    continue
+            
+            # Сортируем по дате конца (возрастание — самые старые просрочки сверху)
+            overdue_list.sort(key=lambda x: x['end_sortable'])
+            
+            # Выводим в таблицу
+            for item in overdue_list:
+                self.overdue_tree.insert(
+                    '', 'end',
+                    values=(
+                        item['end_date'],
+                        item['product'],
+                        item['color'] or '—',
+                        self._format_number(item['remaining']),
+                        item['customer'] or '—'
+                    ),
+                    tags=('overdue',)
+                )
+        except Exception as e:
+            print(f"✗ Ошибка загрузки просроченных резервов: {e}")
+    
+    def _date_to_sortable(self, date_str):
+        """Преобразовать дату ДД.ММ.ГГГГ в числовой формат для сортировки"""
+        try:
+            parts = date_str.split('.')
+            if len(parts) == 3:
+                day, month, year = parts
+                return int(f"{year}{month.zfill(2)}{day.zfill(2)}")
+        except (ValueError, AttributeError):
+            pass
+        return 0
     
     def _on_warehouse_double_click(self, event):
         selected = self.warehouse_tree.selection()
@@ -513,26 +667,8 @@ class EuroblockApp:
         new_stock_entry.focus_set()
         self.root.wait_window(dialog)
     
-    # ========================================================================
-    # [ИЗМЕНЕНО] Исправленный расчёт склада с учётом реализаций из резерва
-    # ========================================================================
     def load_warehouse_data(self):
-        """
-        Загрузить данные в таблицу 'Склад'.
-        
-        ЛОГИКА РАСЧЁТА:
-        - Склад = произведено + корректировки - ВСЕ продажи (обычные + из резерва)
-        - Резерв = сумма всех резервов - сумма реализаций из резерва
-        - Остаток = Склад - Резерв
-        
-        Пример:
-        - На складе 9000, резерв 4000
-        - Реализовано из резерва 2000
-        Результат:
-        - Склад: 7000 (9000 - 2000)
-        - Резерв: 2000 (4000 - 2000)
-        - Остаток: 5000 (7000 - 2000)
-        """
+        """Загрузить данные в таблицу 'Склад'."""
         for item in self.warehouse_tree.get_children():
             self.warehouse_tree.delete(item)
         
@@ -540,7 +676,6 @@ class EuroblockApp:
         all_products = products_repo.get_all()
         volume_map = {row[0]: (row[1] if row[1] else 1) for row in all_products}
         
-        # 1. Считаем произведённую продукцию
         stock_grouped = {}
         for row in records:
             product = row[4]
@@ -552,19 +687,16 @@ class EuroblockApp:
             key = (product.strip(), color.strip())
             stock_grouped[key] = stock_grouped.get(key, 0) + calc_qty
         
-        # 2. Добавляем корректировки
         adjustments = adjustment_repo.get_adjustments_sum()
         for key, diff in adjustments.items():
             stock_grouped[key] = stock_grouped.get(key, 0) + diff
         
-        # 3. [ИЗМЕНЕНО] ВСЕ продажи (включая из резерва) уменьшают склад
+        sold_from_reserve_sum = reserved_products_repo.get_sold_sum()
         direct_sales_sum = sales_repo.get_sales_sum()
         
-        # 4. Вычитаем ВСЕ продажи из склада
         for key, sold_qty in direct_sales_sum.items():
             stock_grouped[key] = stock_grouped.get(key, 0) - sold_qty
         
-        # 5. Считаем резервы (сумма всех резервов)
         reserved_records = reserved_products_repo.get_all_reserved()
         reserved_grouped = {}
         for row in reserved_records:
@@ -574,21 +706,18 @@ class EuroblockApp:
             key = (product.strip(), color.strip())
             reserved_grouped[key] = reserved_grouped.get(key, 0) + quantity
         
-        # 6. [ИЗМЕНЕНО] Получаем реализации из резерва и вычитаем из резерва
-        sold_from_reserve_sum = reserved_products_repo.get_sold_sum()
         for key, sold_qty in sold_from_reserve_sum.items():
             if key in reserved_grouped:
                 reserved_grouped[key] = reserved_grouped[key] - sold_qty
         
-        # 7. Собираем все ключи
         all_keys = (set(stock_grouped.keys()) |
                    set(reserved_grouped.keys()) |
+                   set(sold_from_reserve_sum.keys()) |
                    set(direct_sales_sum.keys()) |
                    set(adjustments.keys()))
         
-        # 8. Разделяем записи на две группы
-        with_stock = []      # Продукция с остатком
-        without_stock = []   # Продукция без остатка
+        with_stock = []
+        without_stock = []
         
         for key in all_keys:
             product, color = key
@@ -622,7 +751,7 @@ class EuroblockApp:
         
         for row_data in without_stock:
             self.warehouse_tree.insert('', 'end', values=row_data, tags=('no_stock',))
-                
+    
     def load_production_summary(self):
         for item in self.production_tree.get_children():
             self.production_tree.delete(item)
@@ -783,12 +912,21 @@ class EuroblockApp:
             except:
                 pass
     
+    # [ИЗМЕНЕНО] Добавлено обновление просроченных резервов
     def _on_main_auto_refresh(self):
         try:
             if hasattr(self, 'warehouse_tree'):
                 try:
                     if self.warehouse_tree.winfo_exists():
                         self.load_warehouse_data()
+                except tk.TclError:
+                    pass
+            
+            # [НОВОЕ] Обновляем таблицу просроченных резервов
+            if hasattr(self, 'overdue_tree'):
+                try:
+                    if self.overdue_tree.winfo_exists():
+                        self.load_overdue_reservations()
                 except tk.TclError:
                     pass
             

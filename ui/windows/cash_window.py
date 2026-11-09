@@ -1,23 +1,10 @@
 """
 Окно "Касса" - учёт кассовых операций.
 
-ЛОГИКА ОТОБРАЖЕНИЯ:
-- Операции группируются по датам.
-- Внутри каждого дня отдельно формируется список приходов и список расходов.
-- Затем они выводятся построчно параллельно:
-    1-й приход + 1-й расход
-    2-й приход + 2-й расход
-    ...
-- После операций выводится:
-    "ОБОРОТ ЗА ДЕНЬ: +X" (или -X, или 0)
-    "ОСТАТОК: Y" (накопительный остаток на конец дня)
-- Дни чередуются: белый / светло-жёлтый
-- "ОСТАТОК ПО КАССЕ" закреплён внизу
-
 [ИЗМЕНЕНО]
-- После сохранения операции дата НЕ сбрасывается — остаётся в поле
-- При открытии окна дата пустая
-- Пользователь может изменить дату вручную
+- При редактировании показываются ОБА значения: и приход, и расход
+- При сохранении обновляются все операции из строки
+- Каждая операция обновляется отдельно в БД
 """
 
 import tkinter as tk
@@ -36,6 +23,14 @@ class CashWindow(BaseToplevelWindow):
     def __init__(self, parent, on_exit_callback):
         self.editing_id = None
         self._iid_to_cells = {}
+        
+        # [НОВОЕ] Для редактирования нескольких операций в строке
+        # Список ID операций, которые редактируются одновременно
+        self._editing_op_ids = []
+        # Соответствие: какая операция — приход, какая — расход
+        self._income_op_id = None
+        self._expense_op_id = None
+        
         super().__init__(parent, on_exit_callback, title="Касса")
 
     # ======================================================================
@@ -50,9 +45,6 @@ class CashWindow(BaseToplevelWindow):
         self.add_field_label(left_inner, "Дата:")
         self.date_entry = DateEntry(left_inner)
         self.date_entry.pack(fill=tk.X, padx=10, pady=(10, 6))
-        
-        # [НОВОЕ] Дата НЕ устанавливается автоматически при открытии окна
-        # Пользователь вводит дату вручную, и она сохраняется после операций
 
         self.add_field_label(left_inner, "Приход, руб.:")
         self.income_entry = tk.Entry(
@@ -317,10 +309,7 @@ class CashWindow(BaseToplevelWindow):
     # ======================================================================
 
     def _build_display_rows(self, ops, date):
-        """
-        Построить строки отображения для одного дня.
-        Приходы и расходы уплотняются независимо.
-        """
+        """Построить строки отображения для одного дня."""
         incomes = []
         expenses = []
 
@@ -390,7 +379,6 @@ class CashWindow(BaseToplevelWindow):
             self._update_total_footer(0, 0)
             return
 
-        # Группировка по дате
         groups = {}
 
         for op in operations:
@@ -409,14 +397,12 @@ class CashWindow(BaseToplevelWindow):
                 "expense": expense or 0
             })
 
-        # Сортируем даты от старых к новым (для расчёта накопительного остатка)
         sorted_dates_asc = sorted(
             groups.keys(),
             key=self._date_to_sort_key,
             reverse=False
         )
 
-        # Считаем оборот и накопительный остаток для каждого дня
         days_data = []
         cumulative_balance = 0
 
@@ -440,7 +426,6 @@ class CashWindow(BaseToplevelWindow):
             total_income += day_income
             total_expense += day_expense
 
-        # Разворачиваем список — выводим от новых к старым
         days_data_reversed = list(reversed(days_data))
 
         for day_index, day in enumerate(days_data_reversed):
@@ -449,7 +434,6 @@ class CashWindow(BaseToplevelWindow):
             turnover = day["turnover"]
             balance = day["balance"]
 
-            # Чередование цветов: белый / светло-жёлтый
             if day_index % 2 == 0:
                 op_tag = "op_white"
                 turn_tag = "turn_white"
@@ -457,7 +441,6 @@ class CashWindow(BaseToplevelWindow):
                 op_tag = "op_yellow"
                 turn_tag = "turn_yellow"
 
-            # Выводим строки операций
             display_rows = self._build_display_rows(ops, date)
 
             for row_index, row in enumerate(display_rows):
@@ -484,7 +467,6 @@ class CashWindow(BaseToplevelWindow):
                     "is_operation": True
                 }
 
-            # Строка "ОБОРОТ ЗА ДЕНЬ: +X"
             turnover_text = f"ОБОРОТ ЗА ДЕНЬ: {self._format_turnover(turnover)}"
             turnover_iid = f"turnover_{date}"
 
@@ -496,7 +478,6 @@ class CashWindow(BaseToplevelWindow):
                 tags=(turn_tag,)
             )
 
-            # Строка "ОСТАТОК: Y" (большие буквы, тот же цвет, что и день)
             balance_text = f"ОСТАТОК: {self._format_money(balance)}"
             balance_iid = f"balance_{date}"
 
@@ -508,7 +489,6 @@ class CashWindow(BaseToplevelWindow):
                 tags=(turn_tag,)
             )
 
-        # Обновляем закреплённый общий итог
         self._update_total_footer(total_income, total_expense)
 
     def _update_total_footer(self, total_income, total_expense):
@@ -526,10 +506,14 @@ class CashWindow(BaseToplevelWindow):
             self.total_expense_label.config(text="")
 
     # ======================================================================
-    # СОХРАНЕНИЕ / РЕДАКТИРОВАНИЕ
+    # [ИЗМЕНЕНО] СОХРАНЕНИЕ / РЕДАКТИРОВАНИЕ
     # ======================================================================
 
     def save_operation(self):
+        """
+        Сохранить операцию.
+        [ИЗМЕНЕНО] При редактировании обновляются все операции из строки.
+        """
         date_str = self.date_entry.get_date()
         income_str = self.income_entry.get().strip()
         expense_str = self.expense_entry.get().strip()
@@ -555,56 +539,83 @@ class CashWindow(BaseToplevelWindow):
             self.show_warning("Внимание", "Неверный формат числа")
             return
 
-        if self.editing_id:
-            success, message = cash_repo.update(
-                self.editing_id,
-                date_str,
-                income,
-                expense
-            )
+        if self._editing_op_ids:
+            # [ИЗМЕНЕНО] Режим редактирования — обновляем все операции из строки
+            success_count = 0
+            error_messages = []
+            
+            # Обновляем операцию прихода (если она есть)
+            if self._income_op_id is not None:
+                success, message = cash_repo.update(
+                    self._income_op_id,
+                    date_str,
+                    income,
+                    0  # Расход в этой операции всегда 0
+                )
+                if success:
+                    success_count += 1
+                else:
+                    error_messages.append(f"Приход: {message}")
+            
+            # Обновляем операцию расхода (если она есть)
+            if self._expense_op_id is not None:
+                success, message = cash_repo.update(
+                    self._expense_op_id,
+                    date_str,
+                    0,  # Приход в этой операции всегда 0
+                    expense
+                )
+                if success:
+                    success_count += 1
+                else:
+                    error_messages.append(f"Расход: {message}")
+            
+            if success_count > 0:
+                self._clear_fields(keep_date=True)
+                self.load_operations()
+                if error_messages:
+                    self.show_warning("Внимание", "Некоторые операции не обновлены:\n" + "\n".join(error_messages))
+                else:
+                    self.show_info("Успех", "Операции обновлены")
+            else:
+                self.show_error("Ошибка", "Не удалось обновить операции:\n" + "\n".join(error_messages))
         else:
+            # Режим добавления новой операции
             success, message = cash_repo.add(
                 date_str,
                 income,
                 expense
             )
 
-        if success:
-            # [ИЗМЕНЕНО] После сохранения очищаем только поля прихода/расхода,
-            # но СОХРАНЯЕМ дату для удобства ввода нескольких операций за один день
-            self._clear_fields(keep_date=True)
-            self.load_operations()
-            self.show_info("Успех", message)
-        else:
-            self.show_error("Ошибка", message)
+            if success:
+                self._clear_fields(keep_date=True)
+                self.load_operations()
+                self.show_info("Успех", message)
+            else:
+                self.show_error("Ошибка", message)
 
-    # [ИЗМЕНЕНО] Метод очистки полей с параметром keep_date
     def _clear_fields(self, keep_date=False):
-        """
-        Очистить поля формы.
-        
-        Args:
-            keep_date: если True — дата остаётся в поле (для удобства
-                       ввода нескольких операций за один день).
-                       Если False — очищаются все поля, включая дату.
-        """
-        # Очищаем дату только если keep_date=False
+        """Очистить поля формы."""
         if not keep_date:
             self.date_entry.clear()
         
-        # Всегда очищаем поля прихода и расхода
         self.income_entry.delete(0, tk.END)
         self.expense_entry.delete(0, tk.END)
         
-        # Сбрасываем режим редактирования
+        # [НОВОЕ] Сбрасываем режим редактирования
         self.editing_id = None
-        self.save_btn.config(text="Сохранить")
+        self._editing_op_ids = []
+        self._income_op_id = None
+        self._expense_op_id = None
         
-        # [НОВОЕ] Возвращаем фокус на поле прихода для быстрого ввода
+        self.save_btn.config(text="Сохранить")
         self.income_entry.focus_set()
 
     def _on_tree_double_click(self, event):
-        """Двойной клик по строке — редактирование"""
+        """
+        Двойной клик по строке — редактирование.
+        [ИЗМЕНЕНО] Загружает все операции из строки.
+        """
         selected = self.tree.selection()
 
         if not selected:
@@ -612,7 +623,6 @@ class CashWindow(BaseToplevelWindow):
 
         item_id = selected[0]
 
-        # Игнорируем служебные строки
         if item_id.startswith("turnover_") or item_id.startswith("balance_"):
             return
 
@@ -621,40 +631,70 @@ class CashWindow(BaseToplevelWindow):
         if not cell:
             return
 
-        column = self.tree.identify_column(event.x)
+        # [ИЗМЕНЕНО] Загружаем все операции из строки
+        self._load_operations_to_form(cell)
 
-        if column == "#3" and cell.get("expense_op_id"):
-            self._load_operation_to_form(cell["expense_op_id"])
-        elif cell.get("income_op_id"):
-            self._load_operation_to_form(cell["income_op_id"])
-        elif cell.get("expense_op_id"):
-            self._load_operation_to_form(cell["expense_op_id"])
-
-    def _load_operation_to_form(self, op_id):
-        """Загрузить операцию в форму для редактирования"""
-        record = cash_repo.get_by_id(op_id)
-
-        if not record:
-            self.show_error("Ошибка", "Запись не найдена")
+    # [ИЗМЕНЕНО] Загрузка всех операций из строки в форму
+    def _load_operations_to_form(self, cell):
+        """
+        Загрузить все операции из строки в форму.
+        Показывает и приход, и расход одновременно.
+        """
+        income_op_id = cell.get("income_op_id")
+        expense_op_id = cell.get("expense_op_id")
+        date = cell.get("date")
+        
+        if not income_op_id and not expense_op_id:
+            self.show_error("Ошибка", "Нет операций для редактирования")
             return
-
-        _, date, income, expense = record[:4]
-
-        # [ИЗМЕНЕНО] При редактировании дата тоже устанавливается
+        
+        # Устанавливаем дату
         self.date_entry.set_date(date)
-
+        
+        # Очищаем поля
         self.income_entry.delete(0, tk.END)
-        if income:
-            self.income_entry.insert(0, self._format_money(income))
-
         self.expense_entry.delete(0, tk.END)
-        if expense:
-            self.expense_entry.insert(0, self._format_money(expense))
-
-        self.editing_id = op_id
+        
+        # Сохраняем ID операций для редактирования
+        self._editing_op_ids = []
+        self._income_op_id = None
+        self._expense_op_id = None
+        
+        # Загружаем операцию прихода (если есть)
+        if income_op_id:
+            record = cash_repo.get_by_id(income_op_id)
+            if record:
+                _, _, income, _ = record[:4]
+                if income and income > 0:
+                    self.income_entry.insert(0, self._format_money(income))
+                    self._income_op_id = income_op_id
+                    self._editing_op_ids.append(income_op_id)
+        
+        # Загружаем операцию расхода (если есть)
+        if expense_op_id:
+            record = cash_repo.get_by_id(expense_op_id)
+            if record:
+                _, _, _, expense = record[:4]
+                if expense and expense > 0:
+                    self.expense_entry.insert(0, self._format_money(expense))
+                    self._expense_op_id = expense_op_id
+                    self._editing_op_ids.append(expense_op_id)
+        
+        # Устанавливаем режим редактирования
+        self.editing_id = self._editing_op_ids[0] if self._editing_op_ids else None
         self.save_btn.config(text="Обновить")
+        
+        # Фокус на первое заполненное поле
+        if self.income_entry.get():
+            self.income_entry.focus_set()
+        elif self.expense_entry.get():
+            self.expense_entry.focus_set()
 
     def edit_selected(self):
+        """
+        Редактирование выбранной операции.
+        [ИЗМЕНЕНО] Загружает все операции из строки.
+        """
         selected = self.tree.selection()
 
         if not selected:
@@ -675,23 +715,15 @@ class CashWindow(BaseToplevelWindow):
         if not cell:
             return
 
-        if cell.get("income_op_id"):
-            self._load_operation_to_form(cell["income_op_id"])
-        elif cell.get("expense_op_id"):
-            self._load_operation_to_form(cell["expense_op_id"])
+        # [ИЗМЕНЕНО] Загружаем все операции из строки
+        self._load_operations_to_form(cell)
 
     # ======================================================================
     # УДАЛЕНИЕ
     # ======================================================================
 
     def delete_selected_cell(self):
-        """
-        Удаление прихода или расхода из выбранной строки.
-        После удаления таблица перестраивается,
-        значения автоматически подтягиваются вверх.
-        
-        [ИЗМЕНЕНО] После удаления дата сохраняется в поле формы.
-        """
+        """Удаление прихода или расхода из выбранной строки."""
         selected = self.tree.selection()
 
         if not selected:
@@ -757,9 +789,6 @@ class CashWindow(BaseToplevelWindow):
         success, message = cash_repo.clear_field(target_op_id, target_type)
 
         if success:
-            # [ИЗМЕНЕНО] После удаления очищаем только поля прихода/расхода,
-            # дата остаётся для удобства
-            self._clear_fields(keep_date=True)
             self.load_operations()
             self.show_info("Успех", message)
         else:

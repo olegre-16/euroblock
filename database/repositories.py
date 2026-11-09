@@ -1945,43 +1945,61 @@ class SalesRepository:
 
 
 class CashRepository:
-    """Репозиторий для работы с кассовыми операциями"""
+    """
+    Репозиторий для работы с кассовыми операциями.
+    [ИЗМЕНЕНО] Добавлен метод update() для редактирования операций.
+    """
     def __init__(self):
         self.table_name = 'cash_operations'
     
     def get_all(self):
-        """Получить все операции, отсортированные по дате (убывание)"""
+        """Получить все операции"""
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute(f'''
-            SELECT id, operation_date, income, expense
-            FROM {self.table_name}
-            ORDER BY 
-                substr(operation_date, 7, 4) || '-' || 
-                substr(operation_date, 4, 2) || '-' || 
-                substr(operation_date, 1, 2) DESC,
-                id DESC
-        ''')
-        result = cursor.fetchall()
-        conn.close()
-        return result
+        try:
+            cursor.execute(f'''
+                SELECT id, operation_date, income, expense
+                FROM {self.table_name}
+                ORDER BY 
+                    substr(operation_date, 7, 4) || '-' || 
+                    substr(operation_date, 4, 2) || '-' || 
+                    substr(operation_date, 1, 2) DESC,
+                    id DESC
+            ''')
+            return cursor.fetchall()
+        except Exception as e:
+            print(f"Ошибка в get_all: {e}")
+            return []
+        finally:
+            conn.close()
     
-    def get_by_id(self, operation_id):
-        """Получить запись по ID"""
+    def get_by_id(self, op_id):
+        """Получить операцию по ID"""
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute(f'''
-            SELECT id, operation_date, income, expense
-            FROM {self.table_name} WHERE id = ?
-        ''', (operation_id,))
-        result = cursor.fetchone()
-        conn.close()
-        return result
+        try:
+            cursor.execute(f'''
+                SELECT id, operation_date, income, expense
+                FROM {self.table_name} WHERE id = ?
+            ''', (op_id,))
+            return cursor.fetchone()
+        except Exception as e:
+            print(f"Ошибка в get_by_id: {e}")
+            return None
+        finally:
+            conn.close()
     
     def add(self, operation_date, income, expense):
-        """Добавить кассовую операцию"""
+        """Добавить новую операцию"""
         if not operation_date:
-            return False, "Дата не указана"
+            return False, "Не указана дата"
+        if income is None:
+            income = 0
+        if expense is None:
+            expense = 0
+        if income <= 0 and expense <= 0:
+            return False, "Укажите приход или расход"
+        
         conn = get_connection()
         cursor = conn.cursor()
         try:
@@ -1989,36 +2007,79 @@ class CashRepository:
                 INSERT INTO {self.table_name} 
                 (operation_date, income, expense)
                 VALUES (?, ?, ?)
-            ''', (operation_date, income or 0, expense or 0))
+            ''', (operation_date, income, expense))
             conn.commit()
             return True, "Операция добавлена"
         except Exception as e:
+            conn.rollback()
             return False, f"Ошибка добавления: {e}"
         finally:
             conn.close()
     
-    def delete(self, operation_id):
-        """Удалить кассовую операцию"""
+    # [НОВОЕ] Метод update для редактирования операций
+    def update(self, op_id, operation_date, income, expense):
+        """
+        Обновить операцию.
+        
+        Args:
+            op_id: ID операции
+            operation_date: новая дата (ДД.ММ.ГГГГ)
+            income: новый приход
+            expense: новый расход
+        
+        Returns:
+            (success, message)
+        """
+        if not operation_date:
+            return False, "Не указана дата"
+        if income is None:
+            income = 0
+        if expense is None:
+            expense = 0
+        
         conn = get_connection()
         cursor = conn.cursor()
         try:
-            cursor.execute(f'DELETE FROM {self.table_name} WHERE id = ?', (operation_id,))
+            # Проверяем, существует ли запись
+            cursor.execute(f'SELECT id FROM {self.table_name} WHERE id = ?', (op_id,))
+            if not cursor.fetchone():
+                return False, f"Операция с ID {op_id} не найдена"
+            
+            cursor.execute(f'''
+                UPDATE {self.table_name}
+                SET operation_date = ?, income = ?, expense = ?
+                WHERE id = ?
+            ''', (operation_date, income, expense, op_id))
+            conn.commit()
+            return True, "Операция обновлена"
+        except Exception as e:
+            conn.rollback()
+            return False, f"Ошибка обновления: {e}"
+        finally:
+            conn.close()
+    
+    def delete(self, op_id):
+        """Удалить операцию"""
+        conn = get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(f'DELETE FROM {self.table_name} WHERE id = ?', (op_id,))
             conn.commit()
             return True, "Операция удалена"
         except Exception as e:
+            conn.rollback()
             return False, f"Ошибка удаления: {e}"
         finally:
             conn.close()
     
-    def clear_field(self, operation_id, field_type):
+    def clear_field(self, op_id, field_type):
         """
-        Обнулить конкретное поле (приход или расход) в записи кассовой операции.
-        [ИЗМЕНЕНО] Теперь обнуляет только выбранное поле, а не удаляет всю запись.
-        Если после обнуления оба поля становятся 0 — запись удаляется полностью.
+        Обнулить конкретное поле (приход или расход) в операции.
+        Если после обнуления оба поля станут 0 — запись удаляется полностью.
         
         Args:
-            operation_id: ID записи в таблице cash_operations
-            field_type: 'income' или 'expense' — какое поле обнулить
+            op_id: ID операции
+            field_type: 'income' или 'expense'
         
         Returns:
             (success, message)
@@ -2029,10 +2090,10 @@ class CashRepository:
         conn = get_connection()
         cursor = conn.cursor()
         try:
-            # 1. Проверяем, существует ли запись
+            # Получаем текущие значения
             cursor.execute(
                 f'SELECT income, expense FROM {self.table_name} WHERE id = ?',
-                (operation_id,)
+                (op_id,)
             )
             row = cursor.fetchone()
             if not row:
@@ -2040,7 +2101,7 @@ class CashRepository:
             
             current_income, current_expense = row
             
-            # 2. Определяем новое значение поля
+            # Определяем новые значения
             if field_type == 'income':
                 new_income = 0
                 new_expense = current_expense
@@ -2050,27 +2111,26 @@ class CashRepository:
                 new_expense = 0
                 field_name = "Расход"
             
-            # 3. Если ОБА поля станут 0 — удаляем запись полностью
+            # Если оба поля станут 0 — удаляем запись
             if new_income == 0 and new_expense == 0:
                 cursor.execute(
                     f'DELETE FROM {self.table_name} WHERE id = ?',
-                    (operation_id,)
+                    (op_id,)
                 )
                 conn.commit()
-                return True, f"{field_name} обнулён. Запись удалена."
+                return True, f"{field_name} обнулён. Запись удалена (оба поля были пусты)."
             
-            # 4. Иначе — обнуляем только выбранное поле
+            # Иначе — обнуляем только выбранное поле
             cursor.execute(
                 f'''UPDATE {self.table_name} 
                     SET income = ?, expense = ?
                     WHERE id = ?''',
-                (new_income, new_expense, operation_id)
+                (new_income, new_expense, op_id)
             )
             conn.commit()
             
-            # Определяем, что осталось
-            remaining_field = "расход" if field_type == 'income' else "приход"
             remaining_value = new_expense if field_type == 'income' else new_income
+            remaining_field = "расход" if field_type == 'income' else "приход"
             
             if remaining_value and remaining_value > 0:
                 message = f"{field_name} обнулён. {remaining_field.capitalize()} ({self._format_money(remaining_value)} руб.) сохранён."
@@ -2095,55 +2155,8 @@ class CashRepository:
             else:
                 return f"{num:.2f}".rstrip('0').rstrip('.')
         except (ValueError, TypeError):
-            return str(value)    
-    def get_daily_totals(self):
-        """Получить итоги по дням."""
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute(f'''
-            SELECT operation_date, 
-                   SUM(income) as total_income, 
-                   SUM(expense) as total_expense
-            FROM {self.table_name}
-            GROUP BY operation_date
-        ''')
-        result = {}
-        for date, income, expense in cursor.fetchall():
-            result[date] = {
-                'income': income or 0,
-                'expense': expense or 0
-            }
-        conn.close()
-        return result
-    
-    def get_balance_up_to_date(self, target_date):
-        """Получить накопленный остаток на указанную дату включительно."""
-        conn = get_connection()
-        cursor = conn.cursor()
-        try:
-            parts = target_date.split('.')
-            if len(parts) == 3:
-                day, month, year = parts
-                comparable = f"{year}{month.zfill(2)}{day.zfill(2)}"
-            else:
-                conn.close()
-                return 0
-        except (ValueError, AttributeError):
-            conn.close()
-            return 0
-        cursor.execute(f'''
-            SELECT 
-                SUM(income) - SUM(expense) as balance
-            FROM {self.table_name}
-            WHERE substr(operation_date, 7, 4) || '-' || 
-                  substr(operation_date, 4, 2) || '-' || 
-                  substr(operation_date, 1, 2) <= ?
-        ''', (comparable,))
-        row = cursor.fetchone()
-        conn.close()
-        if row and row[0] is not None:
-            return row[0]
-        return 0
+            return str(value)
+
 
 
 class GeneralExpensesRepository:

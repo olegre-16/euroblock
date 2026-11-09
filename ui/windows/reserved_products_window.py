@@ -3,14 +3,24 @@
 
 [ВАЖНО] Tkinter Treeview не поддерживает многострочный текст в ячейках.
 Поэтому для отображения нескольких реализаций одного резерва используется
-несколько строк Treeview, визуально объединённых через одинаковые теги.
+несколько строк Treeview, визуально объединённых через одинаковые цвета.
 
-Логика отображения:
+ЛОГИКА ОТОБРАЖЕНИЯ:
 - Каждый резерв занимает N строк (где N = количество реализаций, минимум 1)
-- В первой строке заполняются ВСЕ колонки
+- В первой строке заполняются ВСЕ колонки (дата, продукция, количество и т.д.)
 - В остальных строках заполняется ТОЛЬКО колонка "Реализовано"
 - Все строки одного резерва имеют одинаковый цвет фона (через теги)
-- При выборе любой строки резерва — выделяется весь резерв
+- При выборе любой строки резерва — подсвечиваются все строки этого резерва
+
+ПОДСВЕТКА:
+- Без реализаций — без подсветки (обычный фон)
+- Частично реализована — светло-зелёный фон (#d4edda)
+- Полностью реализована — светло-фиолетовый фон (#e1bee7)
+
+СОРТИРОВКА:
+1. Без реализаций (по дате начала, возрастание)
+2. Частично реализованные (по дате начала, возрастание)
+3. Полностью реализованные (по дате начала, возрастание)
 """
 import tkinter as tk
 from tkinter import ttk
@@ -32,7 +42,7 @@ class ReservedProductsWindow(BaseToplevelWindow):
         self.color_list = [row[0] for row in colors_repo.get_all()]
         self.customer_list = [row[0] for row in customers_repo.get_all()]
         self.editing_id = None
-        # Храним соответствие iid -> res_id для корректной работы кнопок
+        # Словарь соответствия iid → res_id для корректной работы кнопок
         self._iid_to_res_id = {}
         super().__init__(parent, on_exit_callback, title="Продукция в резерве")
     
@@ -134,10 +144,10 @@ class ReservedProductsWindow(BaseToplevelWindow):
         self.tree.tag_configure('partially_sold', background='#d4edda')
         # Полностью реализована — светло-фиолетовый фон
         self.tree.tag_configure('fully_sold', background='#e1bee7')
-        # Выделение строки при выборе
+        # Выделение строк одного резерва при выборе
         self.tree.tag_configure('selected_reserve', background='#b3d9ff')
         
-        # Привязываем обработчик выбора строки для выделения всего резерва
+        # Привязываем обработчик выбора строки для подсветки всего резерва
         self.tree.bind('<<TreeviewSelect>>', self._on_tree_select)
         
         self.load_reservations()
@@ -197,15 +207,17 @@ class ReservedProductsWindow(BaseToplevelWindow):
         return 0
     
     # ========================================================================
-    # Обработчик выбора строки — выделяет все строки одного резерва
+    # [БЕЗОПАСНЫЙ] Обработчик выбора строки — БЕЗ TypeError
     # ========================================================================
     def _on_tree_select(self, event):
-        """При выборе строки — подсвечиваем все строки этого резерва"""
+        """
+        При выборе строки — подсвечиваем все строки этого резерва.
+        [БЕЗОПАСНО] Всегда работаем с кортежами тегов.
+        """
         selected = self.tree.selection()
         if not selected:
             return
         
-        # Получаем res_id из выбранной строки
         selected_iid = selected[0]
         res_id = self._iid_to_res_id.get(selected_iid)
         if res_id is None:
@@ -213,7 +225,13 @@ class ReservedProductsWindow(BaseToplevelWindow):
         
         # Снимаем выделение со всех строк
         for iid in self.tree.get_children():
+            # [БЕЗОПАСНО] Получаем теги и гарантированно преобразуем в кортеж
             current_tags = self.tree.item(iid, 'tags')
+            if isinstance(current_tags, str):
+                current_tags = (current_tags,) if current_tags else ()
+            else:
+                current_tags = tuple(current_tags)
+            
             # Убираем тег selected_reserve, оставляем остальные
             new_tags = tuple(t for t in current_tags if t != 'selected_reserve')
             self.tree.item(iid, tags=new_tags)
@@ -222,7 +240,13 @@ class ReservedProductsWindow(BaseToplevelWindow):
         for iid, rid in self._iid_to_res_id.items():
             if rid == res_id:
                 current_tags = self.tree.item(iid, 'tags')
+                if isinstance(current_tags, str):
+                    current_tags = (current_tags,) if current_tags else ()
+                else:
+                    current_tags = tuple(current_tags)
+                
                 if 'selected_reserve' not in current_tags:
+                    # [БЕЗОПАСНО] Всегда передаём кортеж
                     self.tree.item(iid, tags=current_tags + ('selected_reserve',))
     
     # ========================================================================
@@ -242,18 +266,11 @@ class ReservedProductsWindow(BaseToplevelWindow):
         """
         Загрузить данные в таблицу.
         
-        ЛОГИКА ОТОБРАЖЕНИЯ (из-за ограничения Tkinter):
+        ЛОГИКА ОТОБРАЖЕНИЯ:
         - Каждый резерв занимает N строк (N = количество реализаций, минимум 1)
         - В первой строке заполняются ВСЕ колонки
         - В остальных строках заполняется ТОЛЬКО колонка "Реализовано"
         - Все строки одного резерва имеют одинаковый цвет фона
-        - В колонке "Количество" первой строки: "остаток/реализовано"
-        - В колонке "Количество" остальных строк: пусто
-        
-        СОРТИРОВКА:
-        1. Без реализаций (по дате начала, возрастание)
-        2. Частично реализованные (по дате начала, возрастание)
-        3. Полностью реализованные (по дате начала, возрастание)
         """
         for item in self.tree.get_children():
             self.tree.delete(item)
@@ -270,7 +287,6 @@ class ReservedProductsWindow(BaseToplevelWindow):
         
         for row in records:
             try:
-                # Безопасная распаковка кортежа
                 if len(row) >= 7:
                     res_id, start_date, end_date, product, color, quantity, customer = row[:7]
                 elif len(row) >= 6:
@@ -279,10 +295,8 @@ class ReservedProductsWindow(BaseToplevelWindow):
                 else:
                     continue
                 
-                # Получаем историю реализаций
                 sales_history = all_sales.get(res_id, [])
                 
-                # Определяем статус
                 if not sales_history:
                     status = 'no_sales'
                     sold_sum = 0
@@ -292,7 +306,6 @@ class ReservedProductsWindow(BaseToplevelWindow):
                     remaining = quantity - sold_sum
                     status = 'fully_sold' if remaining <= 0 else 'partially_sold'
                 
-                # Определяем тег для подсветки
                 if status == 'partially_sold':
                     status_tag = 'partially_sold'
                 elif status == 'fully_sold':
@@ -300,17 +313,14 @@ class ReservedProductsWindow(BaseToplevelWindow):
                 else:
                     status_tag = None
                 
-                # Ключ сортировки — дата начала резерва (возрастание)
                 sort_key = self._date_to_sortable(start_date)
                 
-                # Формируем текст для колонки "Количество" (только для первой строки)
                 if not sales_history:
                     quantity_text = self._format_number(quantity)
                 else:
                     quantity_text = f"{self._format_number(remaining)}/{self._format_number(sold_sum)}"
                 
-                # Формируем данные для строк
-                reserve_info = {
+                reserves_data.append({
                     'res_id': res_id,
                     'status': status,
                     'status_tag': status_tag,
@@ -322,23 +332,17 @@ class ReservedProductsWindow(BaseToplevelWindow):
                     'quantity_text': quantity_text,
                     'customer': customer,
                     'sales_history': sales_history
-                }
-                
-                reserves_data.append(reserve_info)
+                })
             
             except Exception as e:
                 print(f"⚠ Ошибка обработки записи {row}: {e}")
                 continue
         
-        # ====================================================================
-        # СОРТИРОВКА: сначала без реализаций, затем частично, затем полностью
-        # ====================================================================
+        # Сортировка: сначала без реализаций, затем частично, затем полностью
         status_order = {'no_sales': 0, 'partially_sold': 1, 'fully_sold': 2}
         reserves_data.sort(key=lambda x: (status_order[x['status']], x['sort_key']))
         
-        # ====================================================================
-        # ВЫВОД В TABLE
-        # ====================================================================
+        # Вывод в таблицу
         for reserve in reserves_data:
             res_id = reserve['res_id']
             status_tag = reserve['status_tag']
@@ -353,7 +357,7 @@ class ReservedProductsWindow(BaseToplevelWindow):
                     reserve['color'] or '—',
                     reserve['quantity_text'],
                     reserve['customer'] or '—',
-                    ''  # Пустая колонка "Реализовано"
+                    ''
                 )
                 iid = f"res_{res_id}_0"
                 tags = (status_tag,) if status_tag else ()
@@ -376,12 +380,7 @@ class ReservedProductsWindow(BaseToplevelWindow):
                     else:
                         # Последующие строки — только колонка "Реализовано"
                         row_data = (
-                            '',  # Дата начала пустая
-                            '',  # Дата конца пустая
-                            '',  # Продукция пустая
-                            '',  # Цвет пустой
-                            '',  # Количество пустое
-                            '',  # Заказчик пустой
+                            '', '', '', '', '', '',
                             f"{sale_date} - {self._format_number(sale_qty)}"
                         )
                     
@@ -495,7 +494,6 @@ class ReservedProductsWindow(BaseToplevelWindow):
             self.show_error("Ошибка", "Неверный формат записи")
             return
         
-        # Проверяем, есть ли реализации по этому резерву
         sales_history = reserved_products_repo.get_reserve_sales(res_id)
         
         if sales_history:
@@ -546,7 +544,6 @@ class ReservedProductsWindow(BaseToplevelWindow):
             self.show_error("Ошибка", "Неверный формат записи")
             return
         
-        # Проверяем, не реализован ли уже полностью
         sold_sum = reserved_products_repo.get_reserve_sold_sum(res_id)
         remaining = quantity - sold_sum
         

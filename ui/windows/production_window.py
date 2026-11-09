@@ -36,24 +36,24 @@ class ProductionWindow(BaseToplevelWindow):
         
         self.add_field_label(left_inner, "Дата:")
         self.date_entry = DateEntry(left_inner)
-        self.date_entry.pack(fill=tk.X, padx=10, pady=(10, 6))
+        self.date_entry.pack(fill=tk.X, padx=10, pady=(10, 2))
         
         self.add_field_label(left_inner, "Оборудование:")
         self.equipment_combo = AutocompleteCombobox(left_inner, values=self.equipment_list)
-        self.equipment_combo.pack(fill=tk.X, padx=10, pady=(0, 6))
+        self.equipment_combo.pack(fill=tk.X, padx=10, pady=(0, 2))
         
         self.add_field_label(left_inner, "Силос цемента:")
         self.silo_combo = AutocompleteCombobox(left_inner, values=self.silo_list)
-        self.silo_combo.pack(fill=tk.X, padx=10, pady=(0, 6))
+        self.silo_combo.pack(fill=tk.X, padx=10, pady=(0, 2))
         
         self.add_field_label(left_inner, "Продукция:")
         self.product_combo = AutocompleteCombobox(left_inner, values=self.product_list)
-        self.product_combo.pack(fill=tk.X, padx=10, pady=(0, 6))
+        self.product_combo.pack(fill=tk.X, padx=10, pady=(0, 2))
         self.product_combo.bind_text_change(self._on_product_change)
         
         self.add_field_label(left_inner, "Цвет:")
         self.color_combo = AutocompleteCombobox(left_inner, values=self.color_list)
-        self.color_combo.pack(fill=tk.X, padx=10, pady=(0, 6))
+        self.color_combo.pack(fill=tk.X, padx=10, pady=(0, 2))
         
         # [ИЗМЕНЕНО] Поля материалов (Цемент, Пески, Керамзит, Пластификатор, Вода)
         # теперь идут ПЕРЕД полем "Количество, подд."
@@ -61,42 +61,42 @@ class ProductionWindow(BaseToplevelWindow):
         self.cement_entry = tk.Entry(
             left_inner, font=FONTS['field'], relief=tk.SOLID, bd=1, justify='left'
         )
-        self.cement_entry.pack(fill=tk.X, padx=10, pady=(0, 6), ipady=SIZES['field_ipady'])
+        self.cement_entry.pack(fill=tk.X, padx=10, pady=(0, 2), ipady=SIZES['field_ipady'])
         self.cement_entry.bind('<KeyRelease>', self._validate_number)
         
         self.add_field_label(left_inner, "Песок обогащённый, кг:")
         self.enriched_sand_entry = tk.Entry(
             left_inner, font=FONTS['field'], relief=tk.SOLID, bd=1, justify='left'
         )
-        self.enriched_sand_entry.pack(fill=tk.X, padx=10, pady=(0, 6), ipady=SIZES['field_ipady'])
+        self.enriched_sand_entry.pack(fill=tk.X, padx=10, pady=(0, 2), ipady=SIZES['field_ipady'])
         self.enriched_sand_entry.bind('<KeyRelease>', self._validate_number)
         
         self.add_field_label(left_inner, "Песок речной, кг:")
         self.river_sand_entry = tk.Entry(
             left_inner, font=FONTS['field'], relief=tk.SOLID, bd=1, justify='left'
         )
-        self.river_sand_entry.pack(fill=tk.X, padx=10, pady=(0, 6), ipady=SIZES['field_ipady'])
+        self.river_sand_entry.pack(fill=tk.X, padx=10, pady=(0, 2), ipady=SIZES['field_ipady'])
         self.river_sand_entry.bind('<KeyRelease>', self._validate_number)
         
         self.add_field_label(left_inner, "Керамзит, кг:")
         self.keramzit_entry = tk.Entry(
             left_inner, font=FONTS['field'], relief=tk.SOLID, bd=1, justify='left'
         )
-        self.keramzit_entry.pack(fill=tk.X, padx=10, pady=(0, 6), ipady=SIZES['field_ipady'])
+        self.keramzit_entry.pack(fill=tk.X, padx=10, pady=(0, 2), ipady=SIZES['field_ipady'])
         self.keramzit_entry.bind('<KeyRelease>', self._validate_number)
         
         self.add_field_label(left_inner, "Пластификатор, кг:")
         self.plasticizer_entry = tk.Entry(
             left_inner, font=FONTS['field'], relief=tk.SOLID, bd=1, justify='left'
         )
-        self.plasticizer_entry.pack(fill=tk.X, padx=10, pady=(0, 6), ipady=SIZES['field_ipady'])
+        self.plasticizer_entry.pack(fill=tk.X, padx=10, pady=(0, 2), ipady=SIZES['field_ipady'])
         self.plasticizer_entry.bind('<KeyRelease>', self._validate_number)
         
         self.add_field_label(left_inner, "Вода, кг:")
         self.water_entry = tk.Entry(
             left_inner, font=FONTS['field'], relief=tk.SOLID, bd=1, justify='left'
         )
-        self.water_entry.pack(fill=tk.X, padx=10, pady=(0, 6), ipady=SIZES['field_ipady'])
+        self.water_entry.pack(fill=tk.X, padx=10, pady=(0, 2), ipady=SIZES['field_ipady'])
         self.water_entry.bind('<KeyRelease>', self._validate_number)
         
         # [ИЗМЕНЕНО] Поле "Количество" перенесено сюда (перед "Примечание")
@@ -105,7 +105,7 @@ class ProductionWindow(BaseToplevelWindow):
         self.quantity_entry = tk.Entry(
             left_inner, font=FONTS['field'], relief=tk.SOLID, bd=1, justify='left'
         )
-        self.quantity_entry.pack(fill=tk.X, padx=10, pady=(0, 6), ipady=SIZES['field_ipady'])
+        self.quantity_entry.pack(fill=tk.X, padx=10, pady=(0, 2), ipady=SIZES['field_ipady'])
         self.quantity_entry.bind('<KeyRelease>', self._validate_number)
         
         self.add_field_label(left_inner, "Примечание:")
