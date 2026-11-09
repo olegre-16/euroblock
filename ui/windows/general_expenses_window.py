@@ -1,15 +1,14 @@
 """
-Окно "Расходы общие" - учёт общих расходов
-Оформление идентично окну "Производство продукции".
-[ИЗМЕНЕНО] Все messagebox заменены на методы базового класса.
+Окно "Расходы общие"
+[ИЗМЕНЕНО] Убраны вызовы _restore_window_state() после show_info()
 """
 import tkinter as tk
 from tkinter import ttk
 from datetime import datetime
 from config.settings import COLORS, FONTS, PADDING, SIZES
 from database.repositories import (
-    suppliers_repo, materials_repo, payers_repo, payment_types_repo,
-    purposes_repo, general_expenses_repo
+    suppliers_repo, materials_repo, payers_repo,
+    payment_types_repo, purposes_repo, general_expenses_repo
 )
 from ui.widgets.date_entry import DateEntry
 from ui.widgets.combobox_autocomplete import AutocompleteCombobox
@@ -17,7 +16,6 @@ from ui.base_window import BaseToplevelWindow
 
 
 class GeneralExpensesWindow(BaseToplevelWindow):
-    """Окно учёта общих расходов"""
     def __init__(self, parent, on_exit_callback):
         self.supplier_list = [row[0] for row in suppliers_repo.get_all()]
         self.material_list = [row[0] for row in materials_repo.get_all()]
@@ -34,37 +32,43 @@ class GeneralExpensesWindow(BaseToplevelWindow):
         
         self.add_field_label(left_inner, "Дата:")
         self.date_entry = DateEntry(left_inner)
-        self.date_entry.pack(fill=tk.X, padx=10, pady=(10, 4))
+        self.date_entry.pack(fill=tk.X, padx=10, pady=(10, 6))
         
         self.add_field_label(left_inner, "Поставщик:")
         self.supplier_combo = AutocompleteCombobox(left_inner, values=self.supplier_list)
-        self.supplier_combo.pack(fill=tk.X, padx=10, pady=(0, 4))
+        self.supplier_combo.pack(fill=tk.X, padx=10, pady=(0, 6))
         
-        self.add_field_label(left_inner, "Материалы и услуги:")
+        self.add_field_label(left_inner, "Материал:")
         self.material_combo = AutocompleteCombobox(left_inner, values=self.material_list)
-        self.material_combo.pack(fill=tk.X, padx=10, pady=(0, 4))
+        self.material_combo.pack(fill=tk.X, padx=10, pady=(0, 6))
         
         self.add_field_label(left_inner, "Количество:")
-        self.quantity_entry = self._create_number_entry(left_inner)
-        self.quantity_entry.pack(fill=tk.X, padx=10, pady=(0, 3), ipady=SIZES['field_ipady'])
+        self.quantity_entry = tk.Entry(
+            left_inner, font=FONTS['field'], relief=tk.SOLID, bd=1, justify='left'
+        )
+        self.quantity_entry.pack(fill=tk.X, padx=10, pady=(0, 6), ipady=SIZES['field_ipady'])
+        self.quantity_entry.bind('<KeyRelease>', self._validate_number)
         
-        self.add_field_label(left_inner, "Цена:")
-        self.price_entry = self._create_number_entry(left_inner)
-        self.price_entry.pack(fill=tk.X, padx=10, pady=(0, 4), ipady=SIZES['field_ipady'])
+        self.add_field_label(left_inner, "Цена, руб.:")
+        self.price_entry = tk.Entry(
+            left_inner, font=FONTS['field'], relief=tk.SOLID, bd=1, justify='left'
+        )
+        self.price_entry.pack(fill=tk.X, padx=10, pady=(0, 6), ipady=SIZES['field_ipady'])
+        self.price_entry.bind('<KeyRelease>', self._validate_number)
         
         self.add_field_label(left_inner, "Плательщик:")
         self.payer_combo = AutocompleteCombobox(left_inner, values=self.payer_list)
-        self.payer_combo.pack(fill=tk.X, padx=10, pady=(0, 4))
+        self.payer_combo.pack(fill=tk.X, padx=10, pady=(0, 6))
         
-        self.add_field_label(left_inner, "Вид оплаты:")
+        self.add_field_label(left_inner, "Тип оплаты:")
         self.payment_type_combo = AutocompleteCombobox(left_inner, values=self.payment_type_list)
-        self.payment_type_combo.pack(fill=tk.X, padx=10, pady=(0, 4))
+        self.payment_type_combo.pack(fill=tk.X, padx=10, pady=(0, 6))
         
         self.add_field_label(left_inner, "Назначение:")
         self.purpose_combo = AutocompleteCombobox(left_inner, values=self.purpose_list)
-        self.purpose_combo.pack(fill=tk.X, padx=10, pady=(0, 4))
+        self.purpose_combo.pack(fill=tk.X, padx=10, pady=(0, 6))
         
-        self.add_field_label(left_inner, "Комментарии:")
+        self.add_field_label(left_inner, "Комментарий:")
         self.comment_entry = tk.Entry(
             left_inner, font=FONTS['field'], relief=tk.SOLID, bd=1, justify='left'
         )
@@ -86,7 +90,6 @@ class GeneralExpensesWindow(BaseToplevelWindow):
         self.exit_btn = self.add_button(left_inner, "Выход", self._on_close,
                                         color=COLORS['button_settings'], side=tk.BOTTOM)
         
-        # ===== ПРАВАЯ ЧАСТЬ =====
         right_frame = self.create_right_panel(content_frame)
         tk.Label(
             right_frame, text="Журнал общих расходов",
@@ -101,39 +104,27 @@ class GeneralExpensesWindow(BaseToplevelWindow):
         
         self.tree = ttk.Treeview(
             tree_container,
-            columns=('date', 'supplier', 'material', 'quantity', 'price', 'total',
-                     'payer', 'payment_type', 'purpose', 'comment'),
-            show='headings', yscrollcommand=scrollbar_y.set, selectmode='browse'
+            columns=('date', 'supplier', 'material', 'quantity', 'price', 'total'),
+            show='headings',
+            yscrollcommand=scrollbar_y.set,
+            selectmode='browse'
         )
         self.tree.heading('date', text='Дата', anchor='w')
         self.tree.heading('supplier', text='Поставщик', anchor='w')
-        self.tree.heading('material', text='Материалы и услуги', anchor='w')
+        self.tree.heading('material', text='Материал', anchor='w')
         self.tree.heading('quantity', text='Кол-во', anchor='w')
-        self.tree.heading('price', text='Цена, руб', anchor='w')
-        self.tree.heading('total', text='Сумма, руб', anchor='w')
-        self.tree.heading('payer', text='Плательщик', anchor='w')
-        self.tree.heading('payment_type', text='Вид оплаты', anchor='w')
-        self.tree.heading('purpose', text='Назначение', anchor='w')
-        self.tree.heading('comment', text='Комментарии', anchor='w')
+        self.tree.heading('price', text='Цена, руб.', anchor='w')
+        self.tree.heading('total', text='Сумма, руб.', anchor='w')
         self.tree.column('date', width=80, anchor='w')
         self.tree.column('supplier', width=150, anchor='w')
-        self.tree.column('material', width=180, anchor='w')
-        self.tree.column('quantity', width=60, anchor='w')
-        self.tree.column('price', width=80, anchor='w')
-        self.tree.column('total', width=90, anchor='w')
-        self.tree.column('payer', width=150, anchor='w')
-        self.tree.column('payment_type', width=150, anchor='w')
-        self.tree.column('purpose', width=150, anchor='w')
-        self.tree.column('comment', width=230, anchor='w')
+        self.tree.column('material', width=150, anchor='w')
+        self.tree.column('quantity', width=80, anchor='w')
+        self.tree.column('price', width=100, anchor='w')
+        self.tree.column('total', width=110, anchor='w')
         scrollbar_y.config(command=self.tree.yview)
         self.tree.pack(fill=tk.BOTH, expand=True)
         
         self.load_expenses()
-    
-    def _create_number_entry(self, parent):
-        entry = tk.Entry(parent, font=FONTS['field'], relief=tk.SOLID, bd=1, justify='left')
-        entry.bind('<KeyRelease>', self._validate_number)
-        return entry
     
     def _validate_number(self, event=None):
         widget = event.widget
@@ -171,72 +162,25 @@ class GeneralExpensesWindow(BaseToplevelWindow):
             return str(value)
     
     def load_expenses(self):
-        selected_item = self.tree.selection()
-        selected_id = None
-        if selected_item:
-            try:
-                selected_id = int(selected_item[0])
-            except (ValueError, IndexError):
-                selected_id = None
-        
         for item in self.tree.get_children():
             self.tree.delete(item)
-        
-        records = general_expenses_repo.get_all()
-        for row in records:
-            (expense_id, date, supplier, material, quantity, price,
-             payer, payment_type, purpose, comment) = row
-            qty = quantity or 0
-            prc = price or 0
-            total = qty * prc
+        expenses = general_expenses_repo.get_all()
+        for row in expenses:
+            exp_id, date, supplier, material, quantity, price = row[:6]
+            total = (quantity or 0) * (price or 0)
             self.tree.insert(
-                '', 'end', iid=str(expense_id),
+                '', 'end', iid=str(exp_id),
                 values=(date, supplier or '—', material or '—',
                         self._format_number(quantity), self._format_number(price),
-                        self._format_number(total), payer or '—',
-                        payment_type or '—', purpose or '—', comment or '—')
+                        self._format_number(total))
             )
-        
-        if selected_id is not None:
-            try:
-                self.tree.selection_set(str(selected_id))
-            except tk.TclError:
-                pass
-    
-    def edit_selected(self):
-        selected = self.tree.selection()
-        if not selected:
-            self.show_warning("Внимание", "Выберите запись для редактирования")
-            return
-        expense_id = int(selected[0])
-        record = general_expenses_repo.get_by_id(expense_id)
-        if not record:
-            self.show_error("Ошибка", "Запись не найдена")
-            return
-        (expense_id, date, supplier, material, quantity, price,
-         payer, payment_type, purpose, comment) = record
-        self.date_entry.set_date(date)
-        self.supplier_combo.set(supplier or '')
-        self.material_combo.set(material or '')
-        self.quantity_entry.delete(0, tk.END)
-        self.quantity_entry.insert(0, self._format_number(quantity))
-        self.price_entry.delete(0, tk.END)
-        self.price_entry.insert(0, self._format_number(price))
-        self.payer_combo.set(payer or '')
-        self.payment_type_combo.set(payment_type or '')
-        self.purpose_combo.set(purpose or '')
-        self.comment_entry.delete(0, tk.END)
-        self.comment_entry.insert(0, comment or '')
-        self.editing_id = expense_id
-        self.save_btn.config(text="Обновить")
-        self.date_entry.entry.focus()
     
     def save_expense(self):
         date_str = self.date_entry.get_date()
         supplier = self.supplier_combo.get().strip()
         material = self.material_combo.get().strip()
-        quantity = self.quantity_entry.get().strip()
-        price = self.price_entry.get().strip()
+        quantity_str = self.quantity_entry.get().strip()
+        price_str = self.price_entry.get().strip()
         payer = self.payer_combo.get().strip()
         payment_type = self.payment_type_combo.get().strip()
         purpose = self.purpose_combo.get().strip()
@@ -248,13 +192,25 @@ class GeneralExpensesWindow(BaseToplevelWindow):
         try:
             datetime.strptime(date_str, '%d.%m.%Y')
         except ValueError:
-            self.show_warning("Внимание", "Неверный формат даты. Используйте ДД.ММ.ГГГГ")
+            self.show_warning("Внимание", "Неверный формат даты")
+            return
+        if not material:
+            self.show_warning("Внимание", "Укажите материал")
+            return
+        if not quantity_str or not price_str:
+            self.show_warning("Внимание", "Укажите количество и цену")
+            return
+        try:
+            quantity = float(quantity_str.replace(',', '.'))
+            price = float(price_str.replace(',', '.'))
+        except ValueError:
+            self.show_warning("Внимание", "Неверный формат числа")
             return
         
         if self.editing_id:
             success, message = general_expenses_repo.update(
-                self.editing_id, date_str, supplier, material,
-                quantity, price, payer, payment_type, purpose, comment
+                self.editing_id, date_str, supplier, material, quantity, price,
+                payer, payment_type, purpose, comment
             )
         else:
             success, message = general_expenses_repo.add(
@@ -265,6 +221,8 @@ class GeneralExpensesWindow(BaseToplevelWindow):
         if success:
             self._clear_fields()
             self.load_expenses()
+            # [ИЗМЕНЕНО] Убран _restore_window_state()
+            self.show_info("Успех", message)
         else:
             self.show_error("Ошибка", message)
     
@@ -281,41 +239,62 @@ class GeneralExpensesWindow(BaseToplevelWindow):
         self.editing_id = None
         self.save_btn.config(text="Сохранить")
     
+    def edit_selected(self):
+        selected = self.tree.selection()
+        if not selected:
+            self.show_warning("Внимание", "Выберите запись для редактирования")
+            return
+        exp_id = int(selected[0])
+        record = general_expenses_repo.get_by_id(exp_id)
+        if not record:
+            self.show_error("Ошибка", "Запись не найдена")
+            return
+        _, date, supplier, material, quantity, price, payer, payment_type, purpose, comment = record[:10]
+        self.date_entry.set_date(date)
+        self.supplier_combo.set(supplier or '')
+        self.material_combo.set(material or '')
+        self.quantity_entry.delete(0, tk.END)
+        self.quantity_entry.insert(0, self._format_number(quantity))
+        self.price_entry.delete(0, tk.END)
+        self.price_entry.insert(0, self._format_number(price))
+        self.payer_combo.set(payer or '')
+        self.payment_type_combo.set(payment_type or '')
+        self.purpose_combo.set(purpose or '')
+        self.comment_entry.delete(0, tk.END)
+        self.comment_entry.insert(0, comment or '')
+        self.editing_id = exp_id
+        self.save_btn.config(text="Обновить")
+    
     def delete_selected(self):
         selected = self.tree.selection()
         if not selected:
             self.show_warning("Внимание", "Выберите запись для удаления")
             return
-        expense_id = int(selected[0])
-        record = general_expenses_repo.get_by_id(expense_id)
+        exp_id = int(selected[0])
+        record = general_expenses_repo.get_by_id(exp_id)
         if not record:
             self.show_error("Ошибка", "Запись не найдена")
             return
-        _, date, supplier, material, quantity, price, payer, payment_type, purpose, comment = record
+        _, date, supplier, material, quantity, price = record[:6]
         total = (quantity or 0) * (price or 0)
         if not self.ask_yes_no(
             "Подтверждение",
-            f"Удалить запись о расходе?\n\n"
-            f"Дата: {date}\n"
-            f"Поставщик: {supplier or '—'}\n"
-            f"Материал: {material or '—'}\n"
+            f"Удалить запись?\n\n"
+            f"Дата: {date}\nМатериал: {material}\n"
             f"Сумма: {self._format_number(total)} руб."
         ):
             return
-        success, message = general_expenses_repo.delete(expense_id)
+        success, message = general_expenses_repo.delete(exp_id)
         if success:
-            if self.editing_id == expense_id:
+            if self.editing_id == exp_id:
                 self._clear_fields()
             self.load_expenses()
+            # [ИЗМЕНЕНО] Убран _restore_window_state()
             self.show_info("Успех", message)
         else:
             self.show_error("Ошибка", message)
-
+    
     def _on_auto_refresh(self):
-        """
-        Автообновление данных при изменении БД другим компьютером.
-        Вызывается таймером из BaseToplevelWindow каждые 3 секунды.
-        """
         try:
             self.load_expenses()
         except Exception as e:

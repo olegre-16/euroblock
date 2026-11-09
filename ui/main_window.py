@@ -1,13 +1,11 @@
 """
 Главное окно программы "ООО Евроблок".
 [ИЗМЕНЕНО]
-- Добавлен флаг _exiting для предотвращения повторных вызовов
-- Обработчик WM_DELETE_WINDOW для крестика в правом верхнем углу
-- Корректное закрытие всех окон и ресурсов при выходе
-- [НОВОЕ] Таймер автообновления данных для сетевого режима (каждые 3 секунды)
-- [НОВОЕ] Обновление склада и силосов при изменении БД другим компьютером
-- [НОВОЕ] Сортировка склада: сначала продукция с остатком, затем без остатка
-- [НОВОЕ] Светло-зелёная подсветка строк без остатка на складе
+- Исправлен расчёт резерва в таблице "Склад"
+- Теперь резерв = сумма всех резервов - сумма реализаций из резерва
+- Обычные продажи = все продажи - продажи из резерва
+- Склад = произведено + корректировки - обычные продажи
+- Остаток = Склад - Резерв
 """
 import os
 import tkinter as tk
@@ -35,7 +33,7 @@ from ui.widgets.silo_canvas import SiloCanvas
 from utils.resources import load_logo, set_window_icon
 
 
-# [НОВОЕ] Флаг завершения — для предотвращения повторных вызовов
+# Флаг завершения
 _exiting = False
 
 
@@ -43,7 +41,6 @@ class EuroblockApp:
     def __init__(self, root, logo_image=None):
         self.root = root
         
-        # [НОВОЕ] Обработчик закрытия главного окна (крестик в правом верхнем углу)
         self.root.protocol("WM_DELETE_WINDOW", self._on_root_close)
         
         self.root.state('zoomed')
@@ -187,11 +184,7 @@ class EuroblockApp:
         
         self.show_welcome()
     
-    # ========================================================================
-    # [НОВОЕ] Обработчик закрытия главного окна (крестик)
-    # ========================================================================
     def _on_root_close(self):
-        """Обработчик события закрытия главного окна (крестик в правом верхнем углу)"""
         self.exit_program()
     
     def _resize_logo(self, image, target_height):
@@ -250,9 +243,7 @@ class EuroblockApp:
         self.settings_btn.config(state='normal', bg=COLORS['button_import'])
     
     def clear_work_area(self):
-        # [НОВОЕ] Останавливаем таймер автообновления при очистке рабочей области
         self._main_auto_refresh_stopped = True
-        
         for widget in self.work_area.winfo_children():
             widget.destroy()
         self.current_settings_panel = None
@@ -329,7 +320,6 @@ class EuroblockApp:
         self.warehouse_tree.pack(fill=tk.BOTH, expand=True)
         self.warehouse_tree.bind('<Double-Button-1>', self._on_warehouse_double_click)
         
-        # [НОВОЕ] Настраиваем тег для строк с продукцией, которой нет на складе
         self.warehouse_tree.tag_configure('no_stock', background='#d4edda')
         
         self.load_warehouse_data()
@@ -346,7 +336,6 @@ class EuroblockApp:
             font=FONTS['menu'], bg=COLORS['panel_bg'], fg=COLORS['title_text']
         ).pack(pady=(10, 5), anchor='w', padx=10)
         
-        # [НОВОЕ] Сохраняем ссылку на контейнер силосов для автообновления
         self.silos_canvas_container = tk.Frame(silos_frame, bg=COLORS['panel_bg'])
         self.silos_canvas_container.pack(fill=tk.X, padx=10, pady=(0, 10))
         
@@ -393,7 +382,6 @@ class EuroblockApp:
         
         self.load_production_summary()
         
-        # [НОВОЕ] Запускаем таймер автообновления для сетевого режима
         self._start_main_auto_refresh()
     
     def _on_warehouse_double_click(self, event):
@@ -526,14 +514,24 @@ class EuroblockApp:
         self.root.wait_window(dialog)
     
     # ========================================================================
-    # [ИЗМЕНЕНО] Загрузка данных склада с новой сортировкой и подсветкой
+    # [ИЗМЕНЕНО] Исправленный расчёт склада с учётом реализаций из резерва
     # ========================================================================
     def load_warehouse_data(self):
         """
         Загрузить данные в таблицу 'Склад'.
-        [ИЗМЕНЕНО] 
-        - Сначала продукция с остатком (в алфавитном порядке)
-        - Затем продукция без остатка (в алфавитном порядке, со светло-зелёным фоном)
+        
+        ЛОГИКА РАСЧЁТА:
+        - Склад = произведено + корректировки - ВСЕ продажи (обычные + из резерва)
+        - Резерв = сумма всех резервов - сумма реализаций из резерва
+        - Остаток = Склад - Резерв
+        
+        Пример:
+        - На складе 9000, резерв 4000
+        - Реализовано из резерва 2000
+        Результат:
+        - Склад: 7000 (9000 - 2000)
+        - Резерв: 2000 (4000 - 2000)
+        - Остаток: 5000 (7000 - 2000)
         """
         for item in self.warehouse_tree.get_children():
             self.warehouse_tree.delete(item)
@@ -542,6 +540,7 @@ class EuroblockApp:
         all_products = products_repo.get_all()
         volume_map = {row[0]: (row[1] if row[1] else 1) for row in all_products}
         
+        # 1. Считаем произведённую продукцию
         stock_grouped = {}
         for row in records:
             product = row[4]
@@ -553,18 +552,19 @@ class EuroblockApp:
             key = (product.strip(), color.strip())
             stock_grouped[key] = stock_grouped.get(key, 0) + calc_qty
         
+        # 2. Добавляем корректировки
         adjustments = adjustment_repo.get_adjustments_sum()
         for key, diff in adjustments.items():
             stock_grouped[key] = stock_grouped.get(key, 0) + diff
         
-        sold_from_reserve_sum = reserved_products_repo.get_sold_sum()
-        for key, sold_qty in sold_from_reserve_sum.items():
-            stock_grouped[key] = stock_grouped.get(key, 0) - sold_qty
-        
+        # 3. [ИЗМЕНЕНО] ВСЕ продажи (включая из резерва) уменьшают склад
         direct_sales_sum = sales_repo.get_sales_sum()
+        
+        # 4. Вычитаем ВСЕ продажи из склада
         for key, sold_qty in direct_sales_sum.items():
             stock_grouped[key] = stock_grouped.get(key, 0) - sold_qty
         
+        # 5. Считаем резервы (сумма всех резервов)
         reserved_records = reserved_products_repo.get_all_reserved()
         reserved_grouped = {}
         for row in reserved_records:
@@ -574,16 +574,21 @@ class EuroblockApp:
             key = (product.strip(), color.strip())
             reserved_grouped[key] = reserved_grouped.get(key, 0) + quantity
         
-        # Собираем все ключи без фильтрации нулевых записей
+        # 6. [ИЗМЕНЕНО] Получаем реализации из резерва и вычитаем из резерва
+        sold_from_reserve_sum = reserved_products_repo.get_sold_sum()
+        for key, sold_qty in sold_from_reserve_sum.items():
+            if key in reserved_grouped:
+                reserved_grouped[key] = reserved_grouped[key] - sold_qty
+        
+        # 7. Собираем все ключи
         all_keys = (set(stock_grouped.keys()) |
                    set(reserved_grouped.keys()) |
-                   set(sold_from_reserve_sum.keys()) |
                    set(direct_sales_sum.keys()) |
                    set(adjustments.keys()))
         
-        # [НОВОЕ] Разделяем записи на две группы
-        with_stock = []      # Продукция с остатком на складе
-        without_stock = []   # Продукция без остатка на складе
+        # 8. Разделяем записи на две группы
+        with_stock = []      # Продукция с остатком
+        without_stock = []   # Продукция без остатка
         
         for key in all_keys:
             product, color = key
@@ -599,13 +604,11 @@ class EuroblockApp:
                 self._format_number(remaining_qty)
             )
             
-            # [НОВОЕ] Разделяем по наличию остатка
             if remaining_qty > 0:
                 with_stock.append(row_data)
             else:
                 without_stock.append(row_data)
         
-        # [НОВОЕ] Сортируем каждую группу по алфавиту (продукция, затем цвет)
         def sort_key(row):
             product = row[0].lower()
             color = row[1].lower() if row[1] != '—' else ''
@@ -614,14 +617,12 @@ class EuroblockApp:
         with_stock.sort(key=sort_key)
         without_stock.sort(key=sort_key)
         
-        # [НОВОЕ] Сначала вставляем записи с остатком
         for row_data in with_stock:
             self.warehouse_tree.insert('', 'end', values=row_data)
         
-        # [НОВОЕ] Затем записи без остатка со светло-зелёным фоном
         for row_data in without_stock:
             self.warehouse_tree.insert('', 'end', values=row_data, tags=('no_stock',))
-    
+                
     def load_production_summary(self):
         for item in self.production_tree.get_children():
             self.production_tree.delete(item)
@@ -734,21 +735,19 @@ class EuroblockApp:
         self.show_welcome()
     
     # ========================================================================
-    # [НОВОЕ] ТАЙМЕР АВТООБНОВЛЕНИЯ ГЛАВНОГО ОКНА
+    # ТАЙМЕР АВТООБНОВЛЕНИЯ ГЛАВНОГО ОКНА
     # ========================================================================
     def _start_main_auto_refresh(self):
-        """Запустить таймер автообновления главного окна в сетевом режиме"""
         try:
             from client_config import MODE
             if MODE == 'network':
-                self._main_auto_refresh_interval = 3000  # 3 секунды
+                self._main_auto_refresh_interval = 3000
                 self._main_auto_refresh_stopped = False
                 self._schedule_main_auto_refresh()
         except ImportError:
             pass
     
     def _schedule_main_auto_refresh(self):
-        """Запланировать следующее автообновление главного окна"""
         try:
             if (hasattr(self, 'root') and 
                 self.root.winfo_exists() and 
@@ -761,26 +760,21 @@ class EuroblockApp:
             pass
     
     def _do_main_auto_refresh(self):
-        """Выполнить автообновление главного окна"""
         try:
             if getattr(self, '_main_auto_refresh_stopped', False):
                 return
-            
             if not hasattr(self, 'root') or not self.root.winfo_exists():
                 return
             
-            # Проверяем, изменилась ли БД
             from database.connection import get_db_sync_monitor
             monitor = get_db_sync_monitor()
             
             if monitor.check_for_changes(force=True):
-                # БД изменилась — обновляем данные на главном экране
                 try:
                     self._on_main_auto_refresh()
                 except Exception as e:
                     print(f"⚠ Ошибка автообновления главного окна: {e}")
             
-            # Планируем следующее обновление
             self._schedule_main_auto_refresh()
         except Exception as e:
             print(f"⚠ Ошибка в _do_main_auto_refresh: {e}")
@@ -790,12 +784,7 @@ class EuroblockApp:
                 pass
     
     def _on_main_auto_refresh(self):
-        """
-        Обновить данные на главном экране.
-        Вызывается при обнаружении изменений в БД другим компьютером.
-        """
         try:
-            # Обновляем таблицу склада
             if hasattr(self, 'warehouse_tree'):
                 try:
                     if self.warehouse_tree.winfo_exists():
@@ -803,18 +792,15 @@ class EuroblockApp:
                 except tk.TclError:
                     pass
             
-            # Обновляем визуализацию силосов
             if hasattr(self, 'silos_canvas_container'):
                 try:
                     if self.silos_canvas_container.winfo_exists():
-                        # Удаляем старый канвас
                         if hasattr(self, 'silos_canvas'):
                             try:
                                 self.silos_canvas.destroy()
                             except tk.TclError:
                                 pass
                         
-                        # Создаём новый канвас с актуальными данными
                         silos_data = cement_silos_repo.get_all()
                         balances = cement_receipts_repo.get_current_balance_by_silo()
                         self.silos_canvas = SiloCanvas(
@@ -826,7 +812,6 @@ class EuroblockApp:
                 except tk.TclError:
                     pass
             
-            # Обновляем таблицу производства
             if hasattr(self, 'production_tree'):
                 try:
                     if self.production_tree.winfo_exists():
@@ -837,13 +822,9 @@ class EuroblockApp:
             print(f"⚠ Ошибка обновления главного окна: {e}")
     
     # ========================================================================
-    # [ИЗМЕНЕНО] Корректное закрытие всех окон и ресурсов при выходе
+    # ВЫХОД ИЗ ПРОГРАММЫ
     # ========================================================================
     def exit_program(self):
-        """
-        Выход из программы.
-        [ИЗМЕНЕНО] Простая синхронная логика БЕЗ потоков.
-        """
         global _exiting
         if _exiting:
             return
@@ -851,24 +832,20 @@ class EuroblockApp:
         if messagebox.askyesno("Выход", "Вы действительно хотите выйти из программы?"):
             _exiting = True
             
-            # [НОВОЕ] Останавливаем таймер автообновления главного окна
             self._main_auto_refresh_stopped = True
             
-            # Закрываем текущее открытое окно (если есть)
             if self.current_window is not None:
                 try:
                     self._destroy_current_window_safely()
                 except Exception:
                     pass
             
-            # Закрываем панель настроек (если открыта)
             if self.current_settings_panel is not None:
                 try:
                     self.current_settings_panel = None
                 except Exception:
                     pass
             
-            # Закрываем все дочерние окна корневого окна
             try:
                 for widget in list(self.root.winfo_children()):
                     if isinstance(widget, tk.Toplevel):
@@ -883,27 +860,23 @@ class EuroblockApp:
             except Exception:
                 pass
             
-            # Закрываем пул соединений с БД
             try:
                 from database.connection import close_pool
                 close_pool()
             except Exception:
                 pass
             
-            # Закрываем кэш
             try:
                 from database.cache import query_cache
                 query_cache.clear()
             except Exception:
                 pass
             
-            # Останавливаем mainloop
             try:
                 self.root.quit()
             except Exception:
                 pass
             
-            # Уничтожаем главное окно
             try:
                 self.root.update()
             except Exception:
@@ -914,7 +887,6 @@ class EuroblockApp:
             except Exception:
                 pass
             
-            # Принудительное завершение процесса
             try:
                 os._exit(0)
             except Exception:

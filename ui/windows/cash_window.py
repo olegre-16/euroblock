@@ -1,15 +1,29 @@
 """
-Окно "Касса" - учёт кассовых операций
-Оформление идентично окну "Производство продукции".
+Окно "Касса" - учёт кассовых операций.
+
+ЛОГИКА ОТОБРАЖЕНИЯ:
+- Операции группируются по датам.
+- Внутри каждого дня отдельно формируется список приходов и список расходов.
+- Затем они выводятся построчно параллельно:
+    1-й приход + 1-й расход
+    2-й приход + 2-й расход
+    ...
+- После операций выводится:
+    "ОБОРОТ ЗА ДЕНЬ: +X" (или -X, или 0)
+    "ОСТАТОК: Y" (накопительный остаток на конец дня)
+- Дни чередуются: белый / светло-жёлтый
+- "ОСТАТОК ПО КАССЕ" закреплён внизу
+
 [ИЗМЕНЕНО]
-- Все messagebox заменены на методы базового класса (предотвращает сворачивание)
-- Добавлен метод _update_total_balance() для вычисления общего остатка
-- Добавлено чередование цветов по дням (светло-серый / белый)
-- Кнопки "Сохранить" и "Удалить" той же ширины, что и "Выход"
+- После сохранения операции дата НЕ сбрасывается — остаётся в поле
+- При открытии окна дата пустая
+- Пользователь может изменить дату вручную
 """
+
 import tkinter as tk
 from tkinter import ttk
 from datetime import datetime
+
 from config.settings import COLORS, FONTS, PADDING, SIZES
 from database.repositories import cash_repo
 from ui.widgets.date_entry import DateEntry
@@ -18,537 +32,872 @@ from ui.base_window import BaseToplevelWindow
 
 class CashWindow(BaseToplevelWindow):
     """Окно учёта кассовых операций"""
+
     def __init__(self, parent, on_exit_callback):
         self.editing_id = None
+        self._iid_to_cells = {}
         super().__init__(parent, on_exit_callback, title="Касса")
-    
+
+    # ======================================================================
+    # ПОСТРОЕНИЕ ИНТЕРФЕЙСА
+    # ======================================================================
+
     def _build_ui(self):
         self.create_title_section(self.window, "Касса")
         content_frame = self.create_content_frame(self.window)
-        
-        # Левая панель
         left_inner = self.create_left_panel_with_scroll(content_frame)
-        
+
         self.add_field_label(left_inner, "Дата:")
         self.date_entry = DateEntry(left_inner)
         self.date_entry.pack(fill=tk.X, padx=10, pady=(10, 6))
         
+        # [НОВОЕ] Дата НЕ устанавливается автоматически при открытии окна
+        # Пользователь вводит дату вручную, и она сохраняется после операций
+
         self.add_field_label(left_inner, "Приход, руб.:")
         self.income_entry = tk.Entry(
-            left_inner, font=FONTS['field'], relief=tk.SOLID, bd=1, justify='left'
+            left_inner,
+            font=FONTS["field"],
+            relief=tk.SOLID,
+            bd=1,
+            justify="left"
         )
-        self.income_entry.pack(fill=tk.X, padx=10, pady=(0, 6), ipady=SIZES['field_ipady'])
-        self.income_entry.bind('<KeyRelease>', self._validate_number)
-        
+        self.income_entry.pack(
+            fill=tk.X,
+            padx=10,
+            pady=(0, 6),
+            ipady=SIZES["field_ipady"]
+        )
+        self.income_entry.bind("<KeyRelease>", self._validate_number)
+
         self.add_field_label(left_inner, "Расход, руб.:")
         self.expense_entry = tk.Entry(
-            left_inner, font=FONTS['field'], relief=tk.SOLID, bd=1, justify='left'
+            left_inner,
+            font=FONTS["field"],
+            relief=tk.SOLID,
+            bd=1,
+            justify="left"
         )
-        self.expense_entry.pack(fill=tk.X, padx=10, pady=(0, 8), ipady=SIZES['field_ipady'])
-        self.expense_entry.bind('<KeyRelease>', self._validate_number)
-        
-        # [ИЗМЕНЕНО] Убран padx=10 у buttons_frame
-        buttons_frame = tk.Frame(left_inner, bg=COLORS['panel_bg'])
+        self.expense_entry.pack(
+            fill=tk.X,
+            padx=10,
+            pady=(0, 8),
+            ipady=SIZES["field_ipady"]
+        )
+        self.expense_entry.bind("<KeyRelease>", self._validate_number)
+
+        buttons_frame = tk.Frame(left_inner, bg=COLORS["panel_bg"])
         buttons_frame.pack(fill=tk.X, padx=0, pady=(10, 5))
-        
-        self.save_btn = self.add_button(buttons_frame, "Сохранить", self.save_operation,
-                                        color=COLORS['button_primary'])
-        self.delete_btn = self.add_button(buttons_frame, "Удалить", self.delete_selected_cell,
-                                          color='#e74c3c')
-        self.delete_btn.bind('<Enter>', lambda e: self.delete_btn.config(bg='#c0392b'))
-        self.delete_btn.bind('<Leave>', lambda e: self.delete_btn.config(bg='#e74c3c'))
-        
-        self.exit_btn = self.add_button(left_inner, "Выход", self._on_close,
-                                        color=COLORS['button_settings'], side=tk.BOTTOM)
-        
+
+        self.save_btn = self.add_button(
+            buttons_frame,
+            "Сохранить",
+            self.save_operation,
+            color=COLORS["button_primary"]
+        )
+        self.save_btn.bind("<Enter>", lambda e: self._on_save_enter())
+        self.save_btn.bind("<Leave>", lambda e: self._on_save_leave())
+
+        self.edit_btn = self.add_button(
+            buttons_frame,
+            "Изменить",
+            self.edit_selected,
+            color="#f39c12"
+        )
+
+        self.delete_btn = self.add_button(
+            buttons_frame,
+            "Удалить",
+            self.delete_selected_cell,
+            color="#e74c3c"
+        )
+
+        self.exit_btn = self.add_button(
+            left_inner,
+            "Выход",
+            self._on_close,
+            color=COLORS["button_settings"],
+            side=tk.BOTTOM
+        )
+
         # Правая часть
         right_frame = self.create_right_panel(content_frame)
+
         tk.Label(
-            right_frame, text="Журнал кассовых операций",
-            font=FONTS['menu'], bg=COLORS['panel_bg'], fg=COLORS['title_text']
-        ).pack(pady=(10, 5), anchor='w', padx=10)
-        
-        tree_container = tk.Frame(right_frame, bg=COLORS['panel_bg'])
-        tree_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
-        
+            right_frame,
+            text="Журнал кассовых операций",
+            font=FONTS["menu"],
+            bg=COLORS["panel_bg"],
+            fg=COLORS["title_text"]
+        ).pack(pady=(10, 5), anchor="w", padx=10)
+
+        tree_wrapper = tk.Frame(right_frame, bg=COLORS["panel_bg"])
+        tree_wrapper.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+
+        tree_container = tk.Frame(tree_wrapper, bg=COLORS["panel_bg"])
+        tree_container.pack(fill=tk.BOTH, expand=True)
+
         scrollbar_y = ttk.Scrollbar(tree_container, orient=tk.VERTICAL)
         scrollbar_y.pack(side=tk.RIGHT, fill=tk.Y)
-        
+
         self.tree = ttk.Treeview(
             tree_container,
-            columns=('date', 'income', 'expense'),
-            show='headings', yscrollcommand=scrollbar_y.set, selectmode='browse'
+            columns=("date", "income", "expense"),
+            show="headings",
+            yscrollcommand=scrollbar_y.set,
+            selectmode="browse"
         )
-        self.tree.heading('date', text='Дата', anchor='w')
-        self.tree.heading('income', text='Приход, руб.', anchor='w')
-        self.tree.heading('expense', text='Расход, руб.', anchor='w')
-        self.tree.column('date', width=150, anchor='w')
-        self.tree.column('income', width=200, anchor='w')
-        self.tree.column('expense', width=200, anchor='w')
+
+        self.tree.heading("date", text="Дата", anchor="w")
+        self.tree.heading("income", text="Приход, руб.", anchor="w")
+        self.tree.heading("expense", text="Расход, руб.", anchor="w")
+
+        self.tree.column("date", width=180, anchor="w")
+        self.tree.column("income", width=150, anchor="w")
+        self.tree.column("expense", width=150, anchor="w")
+
         scrollbar_y.config(command=self.tree.yview)
         self.tree.pack(fill=tk.BOTH, expand=True)
-        
-        # [НОВОЕ] Настраиваем теги для чередования цветов по дням
-        self.tree.tag_configure('gray_day', background='#f0f0f0')
-        self.tree.tag_configure('white_day', background='#ffffff')
-        
-        self.tree.bind('<<TreeviewSelect>>', self._on_tree_select)
-        
-        # Блок итогов
-        self.summary_frame = tk.Frame(right_frame, bg=COLORS['panel_bg'])
-        self.summary_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
-        
-        tk.Frame(self.summary_frame, height=2, bg=COLORS['button_primary']).pack(
-            fill=tk.X, pady=(0, 10)
+
+        # Теги чередования дней: белый / светло-жёлтый
+        self.tree.tag_configure(
+            "op_white",
+            background="white",
+            foreground=COLORS["title_text"]
         )
-        
-        # [ИЗМЕНЕНО] Уменьшен шрифт с 12 до 10
-        self.balance_label = tk.Label(
-            self.summary_frame, text="Остаток, руб.: 0",
-            font=('Arial', 10, 'bold'),
-            bg=COLORS['panel_bg'],
-            fg=COLORS['title_text'], anchor='w'
+        self.tree.tag_configure(
+            "turn_white",
+            background="white",
+            foreground="#2c3e50",
+            font=FONTS["field"]
         )
-        self.balance_label.pack(fill=tk.X, padx=10, pady=(0, 5))
-        
+
+        self.tree.tag_configure(
+            "op_yellow",
+            background="#fff9c4",
+            foreground=COLORS["title_text"]
+        )
+        self.tree.tag_configure(
+            "turn_yellow",
+            background="#fff9c4",
+            foreground="#2c3e50",
+            font=FONTS["field"]
+        )
+
+        self.tree.bind("<Double-Button-1>", self._on_tree_double_click)
+
+        # Закреплённый остаток по кассе
+        self.total_frame = tk.Frame(
+            tree_wrapper,
+            bg="#d4edda",
+            relief=tk.RAISED,
+            bd=2
+        )
+        self.total_frame.pack(fill=tk.X, side=tk.BOTTOM)
+
+        total_inner = tk.Frame(self.total_frame, bg="#d4edda")
+        total_inner.pack(fill=tk.X, padx=5, pady=8)
+
+        self.total_date_label = tk.Label(
+            total_inner,
+            text="ОСТАТОК ПО КАССЕ:",
+            font=FONTS["menu"],
+            bg="#d4edda",
+            fg="#155724",
+            anchor="w",
+            width=20
+        )
+        self.total_date_label.pack(side=tk.LEFT, padx=(5, 10))
+
+        self.total_income_label = tk.Label(
+            total_inner,
+            text="",
+            font=FONTS["menu"],
+            bg="#d4edda",
+            fg="#155724",
+            anchor="w",
+            width=18
+        )
+        self.total_income_label.pack(side=tk.LEFT, padx=(10, 10))
+
+        self.total_expense_label = tk.Label(
+            total_inner,
+            text="",
+            font=FONTS["menu"],
+            bg="#d4edda",
+            fg="#155724",
+            anchor="w",
+            width=18
+        )
+        self.total_expense_label.pack(side=tk.LEFT, padx=(10, 0))
+
         self.load_operations()
-    
+
+    # ======================================================================
+    # СЛУЖЕБНЫЕ МЕТОДЫ
+    # ======================================================================
+
     def _validate_number(self, event=None):
         widget = event.widget
         value = widget.get()
-        filtered = ''
+        filtered = ""
+
         for char in value:
-            if char.isdigit() or char in '-.,':
+            if char.isdigit() or char in "-., ":
                 filtered += char
+
         if filtered != value:
             widget.delete(0, tk.END)
             widget.insert(0, filtered)
-    
-    def _on_tree_select(self, event):
-        selected = self.tree.selection()
-        if not selected:
-            return
-        self._update_summary_for_item(selected[0])
-    
-    def _update_summary_for_item(self, item_id):
-        """Обновить остаток при выборе конкретной строки"""
-        values = self.tree.item(item_id, 'values')
-        if not values:
-            self._clear_summary()
-            return
-        
-        date_str = values[0]
-        if item_id.startswith('total_'):
-            date_str = item_id[6:]
-        elif item_id.startswith('turnover_'):
-            date_str = item_id[9:]
-        
-        if not date_str or date_str in ('Итог', 'Оборот за день'):
-            children = self.tree.get_children()
-            idx = list(children).index(item_id)
-            for i in range(idx - 1, -1, -1):
-                prev_values = self.tree.item(children[i], 'values')
-                if prev_values and prev_values[0] and prev_values[0] not in ('Итог', 'Оборот за день'):
-                    date_str = prev_values[0]
-                    break
-        
-        if not date_str or date_str in ('Итог', 'Оборот за день'):
-            self._clear_summary()
-            return
-        
-        balance = cash_repo.get_balance_up_to_date(date_str)
-        self.balance_label.config(text=f"Остаток, руб.: {self._format_money(balance)}")
-    
-    # [НОВОЕ] Метод для вычисления общего остатка
-    def _update_total_balance(self):
-        """
-        Вычислить и отобразить общий остаток по всем операциям.
-        Вызывается при загрузке окна и после изменения данных.
-        """
-        try:
-            operations = cash_repo.get_all()
-            total_income = 0
-            total_expense = 0
-            
-            for op_id, date, income, expense in operations:
-                total_income += income or 0
-                total_expense += expense or 0
-            
-            balance = total_income - total_expense
-            self.balance_label.config(text=f"Остаток, руб.: {self._format_money(balance)}")
-        except Exception as e:
-            print(f"Ошибка вычисления остатка: {e}")
-            self.balance_label.config(text="Остаток, руб.: 0")
-    
-    def _clear_summary(self):
-        self.balance_label.config(text="Остаток, руб.: 0")
-    
+
+    def _on_save_enter(self):
+        if self.editing_id:
+            self.save_btn.config(bg="#27ae60")
+        else:
+            self.save_btn.config(bg=COLORS["button_primary_hover"])
+
+    def _on_save_leave(self):
+        if self.editing_id:
+            self.save_btn.config(bg="#27ae60")
+        else:
+            self.save_btn.config(bg=COLORS["button_primary"])
+
     def _format_money(self, value):
-        if value is None or value == '':
-            return '0'
+        """Форматирование денежной суммы"""
+        if value is None or value == "":
+            return ""
+
         try:
             num = float(value)
+
+            if num == 0:
+                return "0"
+
             if num.is_integer():
-                return str(int(num))
-            else:
-                return f"{num:.2f}".rstrip('0').rstrip('.')
+                return f"{int(num):,}".replace(",", " ")
+
+            return f"{num:,.2f}".replace(",", " ")
         except (ValueError, TypeError):
             return str(value)
-    
-    def _parse_money(self, s):
-        if not s:
+
+    def _format_turnover(self, value):
+        """Форматирование оборота с плюсом/минусом"""
+        if value > 0:
+            return f"+{self._format_money(value)}"
+        elif value < 0:
+            return f"-{self._format_money(-value)}"
+        else:
+            return "0"
+
+    def _parse_money(self, value_str):
+        """Преобразование денежной строки в число"""
+        if not value_str or str(value_str).strip() == "":
             return None
+
         try:
-            return float(s.replace(',', '.'))
-        except:
+            cleaned = str(value_str).replace(" ", "").replace(",", ".")
+            return float(cleaned)
+        except (ValueError, TypeError):
             return None
-    
+
+    def _date_to_sort_key(self, date_str):
+        """ДД.ММ.ГГГГ -> YYYY-MM-DD для сортировки"""
+        try:
+            parts = date_str.split(".")
+            if len(parts) == 3:
+                day, month, year = parts
+                return f"{year}-{month.zfill(2)}-{day.zfill(2)}"
+        except (ValueError, AttributeError):
+            pass
+
+        return "9999-99-99"
+
+    # ======================================================================
+    # ЛОГИКА ПОСТРОЕНИЯ СТРОК
+    # ======================================================================
+
+    def _build_display_rows(self, ops, date):
+        """
+        Построить строки отображения для одного дня.
+        Приходы и расходы уплотняются независимо.
+        """
+        incomes = []
+        expenses = []
+
+        sorted_ops = sorted(ops, key=lambda x: x["id"])
+
+        for op in sorted_ops:
+            income = op.get("income") or 0
+            expense = op.get("expense") or 0
+
+            if income > 0:
+                incomes.append({
+                    "op_id": op["id"],
+                    "amount": income,
+                    "date": date
+                })
+
+            if expense > 0:
+                expenses.append({
+                    "op_id": op["id"],
+                    "amount": expense,
+                    "date": date
+                })
+
+        rows_count = max(len(incomes), len(expenses))
+        display_rows = []
+
+        for index in range(rows_count):
+            income_item = incomes[index] if index < len(incomes) else None
+            expense_item = expenses[index] if index < len(expenses) else None
+
+            income_op_id = income_item["op_id"] if income_item else None
+            expense_op_id = expense_item["op_id"] if expense_item else None
+
+            income_amount = income_item["amount"] if income_item else 0
+            expense_amount = expense_item["amount"] if expense_item else 0
+
+            iid = f"cash_row_{date}_{index}_{income_op_id or 0}_{expense_op_id or 0}"
+
+            display_rows.append({
+                "iid": iid,
+                "income": income_amount,
+                "expense": expense_amount,
+                "income_op_id": income_op_id,
+                "expense_op_id": expense_op_id,
+                "date": date
+            })
+
+        return display_rows
+
+    # ======================================================================
+    # ЗАГРУЗКА ОПЕРАЦИЙ
+    # ======================================================================
+
+    def load_operations(self):
+        """Загрузить операции в таблицу."""
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+
+        self._iid_to_cells = {}
+
+        operations = cash_repo.get_all()
+
+        total_income = 0
+        total_expense = 0
+
+        if not operations:
+            self._update_total_footer(0, 0)
+            return
+
+        # Группировка по дате
+        groups = {}
+
+        for op in operations:
+            if len(op) < 4:
+                continue
+
+            op_id, date, income, expense = op[:4]
+
+            if date not in groups:
+                groups[date] = []
+
+            groups[date].append({
+                "id": op_id,
+                "date": date,
+                "income": income or 0,
+                "expense": expense or 0
+            })
+
+        # Сортируем даты от старых к новым (для расчёта накопительного остатка)
+        sorted_dates_asc = sorted(
+            groups.keys(),
+            key=self._date_to_sort_key,
+            reverse=False
+        )
+
+        # Считаем оборот и накопительный остаток для каждого дня
+        days_data = []
+        cumulative_balance = 0
+
+        for date in sorted_dates_asc:
+            ops = groups[date]
+
+            day_income = sum((op["income"] or 0) for op in ops)
+            day_expense = sum((op["expense"] or 0) for op in ops)
+            turnover = day_income - day_expense
+            cumulative_balance += turnover
+
+            days_data.append({
+                "date": date,
+                "ops": ops,
+                "day_income": day_income,
+                "day_expense": day_expense,
+                "turnover": turnover,
+                "balance": cumulative_balance
+            })
+
+            total_income += day_income
+            total_expense += day_expense
+
+        # Разворачиваем список — выводим от новых к старым
+        days_data_reversed = list(reversed(days_data))
+
+        for day_index, day in enumerate(days_data_reversed):
+            date = day["date"]
+            ops = day["ops"]
+            turnover = day["turnover"]
+            balance = day["balance"]
+
+            # Чередование цветов: белый / светло-жёлтый
+            if day_index % 2 == 0:
+                op_tag = "op_white"
+                turn_tag = "turn_white"
+            else:
+                op_tag = "op_yellow"
+                turn_tag = "turn_yellow"
+
+            # Выводим строки операций
+            display_rows = self._build_display_rows(ops, date)
+
+            for row_index, row in enumerate(display_rows):
+                iid = row["iid"]
+
+                self.tree.insert(
+                    "",
+                    "end",
+                    iid=iid,
+                    values=(
+                        date if row_index == 0 else "",
+                        self._format_money(row["income"]) if row["income"] else "",
+                        self._format_money(row["expense"]) if row["expense"] else ""
+                    ),
+                    tags=(op_tag,)
+                )
+
+                self._iid_to_cells[iid] = {
+                    "income_op_id": row["income_op_id"],
+                    "expense_op_id": row["expense_op_id"],
+                    "income_amount": row["income"],
+                    "expense_amount": row["expense"],
+                    "date": date,
+                    "is_operation": True
+                }
+
+            # Строка "ОБОРОТ ЗА ДЕНЬ: +X"
+            turnover_text = f"ОБОРОТ ЗА ДЕНЬ: {self._format_turnover(turnover)}"
+            turnover_iid = f"turnover_{date}"
+
+            self.tree.insert(
+                "",
+                "end",
+                iid=turnover_iid,
+                values=(turnover_text, "", ""),
+                tags=(turn_tag,)
+            )
+
+            # Строка "ОСТАТОК: Y" (большие буквы, тот же цвет, что и день)
+            balance_text = f"ОСТАТОК: {self._format_money(balance)}"
+            balance_iid = f"balance_{date}"
+
+            self.tree.insert(
+                "",
+                "end",
+                iid=balance_iid,
+                values=(balance_text, "", ""),
+                tags=(turn_tag,)
+            )
+
+        # Обновляем закреплённый общий итог
+        self._update_total_footer(total_income, total_expense)
+
+    def _update_total_footer(self, total_income, total_expense):
+        """Обновить закреплённый остаток по кассе"""
+        balance = total_income - total_expense
+
+        if balance > 0:
+            self.total_income_label.config(text=self._format_money(balance))
+            self.total_expense_label.config(text="")
+        elif balance < 0:
+            self.total_income_label.config(text="")
+            self.total_expense_label.config(text=self._format_money(-balance))
+        else:
+            self.total_income_label.config(text="0")
+            self.total_expense_label.config(text="")
+
+    # ======================================================================
+    # СОХРАНЕНИЕ / РЕДАКТИРОВАНИЕ
+    # ======================================================================
+
     def save_operation(self):
         date_str = self.date_entry.get_date()
         income_str = self.income_entry.get().strip()
         expense_str = self.expense_entry.get().strip()
-        
+
         if not date_str:
             self.show_warning("Внимание", "Укажите дату")
             return
+
         try:
-            datetime.strptime(date_str, '%d.%m.%Y')
+            datetime.strptime(date_str, "%d.%m.%Y")
         except ValueError:
-            self.show_warning("Внимание", "Неверный формат даты. Используйте ДД.ММ.ГГГГ")
+            self.show_warning("Внимание", "Неверный формат даты")
             return
-        
+
         if not income_str and not expense_str:
             self.show_warning("Внимание", "Укажите приход или расход")
             return
-        
-        try:
-            income = float(income_str.replace(',', '.')) if income_str else 0
-        except ValueError:
-            self.show_warning("Внимание", "Неверный формат прихода")
+
+        income = self._parse_money(income_str) if income_str else 0
+        expense = self._parse_money(expense_str) if expense_str else 0
+
+        if income is None or expense is None:
+            self.show_warning("Внимание", "Неверный формат числа")
             return
-        
-        try:
-            expense = float(expense_str.replace(',', '.')) if expense_str else 0
-        except ValueError:
-            self.show_warning("Внимание", "Неверный формат расхода")
-            return
-        
-        success, message = cash_repo.add(date_str, income, expense)
+
+        if self.editing_id:
+            success, message = cash_repo.update(
+                self.editing_id,
+                date_str,
+                income,
+                expense
+            )
+        else:
+            success, message = cash_repo.add(
+                date_str,
+                income,
+                expense
+            )
+
         if success:
-            self.income_entry.delete(0, tk.END)
-            self.expense_entry.delete(0, tk.END)
+            # [ИЗМЕНЕНО] После сохранения очищаем только поля прихода/расхода,
+            # но СОХРАНЯЕМ дату для удобства ввода нескольких операций за один день
+            self._clear_fields(keep_date=True)
             self.load_operations()
-            self.income_entry.focus_set()
-            self._restore_window_state()
+            self.show_info("Успех", message)
         else:
             self.show_error("Ошибка", message)
-            self._restore_window_state()
-    
-    # [ИЗМЕНЕНО] Добавлено чередование цветов по дням
-    def load_operations(self):
-        """Загрузить данные в таблицу с чередованием цветов по дням"""
-        for item in self.tree.get_children():
-            self.tree.delete(item)
+
+    # [ИЗМЕНЕНО] Метод очистки полей с параметром keep_date
+    def _clear_fields(self, keep_date=False):
+        """
+        Очистить поля формы.
         
-        operations = cash_repo.get_all()
-        grouped_by_date = {}
-        for op_id, date, income, expense in operations:
-            if date not in grouped_by_date:
-                grouped_by_date[date] = []
-            grouped_by_date[date].append((op_id, income, expense))
+        Args:
+            keep_date: если True — дата остаётся в поле (для удобства
+                       ввода нескольких операций за один день).
+                       Если False — очищаются все поля, включая дату.
+        """
+        # Очищаем дату только если keep_date=False
+        if not keep_date:
+            self.date_entry.clear()
         
-        def date_to_comparable(d):
-            try:
-                parts = d.split('.')
-                if len(parts) == 3:
-                    day, month, year = parts
-                    return int(f"{year}{month.zfill(2)}{day.zfill(2)}")
-            except:
-                pass
-            return 0
+        # Всегда очищаем поля прихода и расхода
+        self.income_entry.delete(0, tk.END)
+        self.expense_entry.delete(0, tk.END)
         
-        sorted_dates = sorted(grouped_by_date.keys(), 
-                              key=lambda d: date_to_comparable(d), reverse=True)
+        # Сбрасываем режим редактирования
+        self.editing_id = None
+        self.save_btn.config(text="Сохранить")
         
-        # [НОВОЕ] Счётчик дней для чередования цветов
-        day_index = 0
-        
-        for date in sorted_dates:
-            # [НОВОЕ] Определяем тег цвета для этого дня
-            day_tag = 'gray_day' if day_index % 2 == 0 else 'white_day'
-            day_index += 1
-            
-            ops = grouped_by_date[date]
-            incomes = []
-            expenses = []
-            for op_id, inc, exp in ops:
-                if inc and inc > 0:
-                    incomes.append({'id': op_id, 'value': inc})
-                if exp and exp > 0:
-                    expenses.append({'id': op_id, 'value': exp})
-            
-            num_rows = max(len(incomes), len(expenses))
-            if num_rows == 0:
-                continue
-            
-            for i in range(num_rows):
-                date_display = date if i == 0 else ''
-                inc_val = ''
-                if i < len(incomes):
-                    inc_val = self._format_money(incomes[i]['value'])
-                exp_val = ''
-                if i < len(expenses):
-                    exp_val = self._format_money(expenses[i]['value'])
-                
-                row_iid = f"row__{date}__{i}"
-                self.tree.insert(
-                    '', 'end', iid=row_iid,
-                    values=(date_display, inc_val, exp_val),
-                    tags=(day_tag,)
-                )
-            
-            total_income = sum(item['value'] for item in incomes)
-            total_expense = sum(item['value'] for item in expenses)
-            
-            self.tree.insert(
-                '', 'end', iid=f"total_{date}",
-                values=("Итог", self._format_money(total_income), 
-                        self._format_money(total_expense)),
-                tags=(day_tag,)
+        # [НОВОЕ] Возвращаем фокус на поле прихода для быстрого ввода
+        self.income_entry.focus_set()
+
+    def _on_tree_double_click(self, event):
+        """Двойной клик по строке — редактирование"""
+        selected = self.tree.selection()
+
+        if not selected:
+            return
+
+        item_id = selected[0]
+
+        # Игнорируем служебные строки
+        if item_id.startswith("turnover_") or item_id.startswith("balance_"):
+            return
+
+        cell = self._iid_to_cells.get(item_id)
+
+        if not cell:
+            return
+
+        column = self.tree.identify_column(event.x)
+
+        if column == "#3" and cell.get("expense_op_id"):
+            self._load_operation_to_form(cell["expense_op_id"])
+        elif cell.get("income_op_id"):
+            self._load_operation_to_form(cell["income_op_id"])
+        elif cell.get("expense_op_id"):
+            self._load_operation_to_form(cell["expense_op_id"])
+
+    def _load_operation_to_form(self, op_id):
+        """Загрузить операцию в форму для редактирования"""
+        record = cash_repo.get_by_id(op_id)
+
+        if not record:
+            self.show_error("Ошибка", "Запись не найдена")
+            return
+
+        _, date, income, expense = record[:4]
+
+        # [ИЗМЕНЕНО] При редактировании дата тоже устанавливается
+        self.date_entry.set_date(date)
+
+        self.income_entry.delete(0, tk.END)
+        if income:
+            self.income_entry.insert(0, self._format_money(income))
+
+        self.expense_entry.delete(0, tk.END)
+        if expense:
+            self.expense_entry.insert(0, self._format_money(expense))
+
+        self.editing_id = op_id
+        self.save_btn.config(text="Обновить")
+
+    def edit_selected(self):
+        selected = self.tree.selection()
+
+        if not selected:
+            self.show_warning("Внимание", "Выберите запись для редактирования")
+            return
+
+        item_id = selected[0]
+
+        if item_id.startswith("turnover_") or item_id.startswith("balance_"):
+            self.show_warning(
+                "Внимание",
+                "Выберите конкретную операцию для редактирования"
             )
-            
-            turnover = total_income - total_expense
-            self.tree.insert(
-                '', 'end', iid=f"turnover_{date}",
-                values=(f"Оборот за день: {self._format_money(turnover)} руб.", "", ""),
-                tags=(day_tag,)
-            )
-        
-        # [НОВОЕ] Вычисляем и отображаем общий остаток
-        self._update_total_balance()
-    
+            return
+
+        cell = self._iid_to_cells.get(item_id)
+
+        if not cell:
+            return
+
+        if cell.get("income_op_id"):
+            self._load_operation_to_form(cell["income_op_id"])
+        elif cell.get("expense_op_id"):
+            self._load_operation_to_form(cell["expense_op_id"])
+
+    # ======================================================================
+    # УДАЛЕНИЕ
+    # ======================================================================
+
     def delete_selected_cell(self):
         """
-        Удалить выбранное значение (приход или расход) из таблицы.
-        [ИЗМЕНЕНО] Корректная обработка записей с обоими значениями.
+        Удаление прихода или расхода из выбранной строки.
+        После удаления таблица перестраивается,
+        значения автоматически подтягиваются вверх.
+        
+        [ИЗМЕНЕНО] После удаления дата сохраняется в поле формы.
         """
         selected = self.tree.selection()
+
         if not selected:
             self.show_warning("Внимание", "Выберите ячейку для удаления")
             return
-        
+
         item_id = selected[0]
-        if item_id.startswith('total_') or item_id.startswith('turnover_'):
+
+        if item_id.startswith("turnover_") or item_id.startswith("balance_"):
             self.show_warning(
                 "Внимание",
                 "Выберите конкретное значение прихода или расхода для удаления"
             )
             return
-        
-        values = self.tree.item(item_id, 'values')
-        if not values:
+
+        cell = self._iid_to_cells.get(item_id)
+
+        if not cell:
             return
-        
-        actual_date = self._get_date_from_group(item_id)
-        if not actual_date:
-            self.show_error("Ошибка", "Не удалось определить дату записи")
-            return
-        
-        income_val_str = values[1]
-        expense_val_str = values[2]
-        inc_float = self._parse_money(income_val_str)
-        exp_float = self._parse_money(expense_val_str)
-        
-        has_income = inc_float is not None and inc_float != 0
-        has_expense = exp_float is not None and exp_float != 0
-        
+
+        income_op_id = cell.get("income_op_id")
+        expense_op_id = cell.get("expense_op_id")
+
+        income_amount = cell.get("income_amount") or 0
+        expense_amount = cell.get("expense_amount") or 0
+        date = cell.get("date")
+
+        has_income = income_op_id is not None and income_amount > 0
+        has_expense = expense_op_id is not None and expense_amount > 0
+
         if not has_income and not has_expense:
             self.show_warning("Внимание", "В выбранной строке нет значений для удаления")
             return
-        
-        # Определяем, что нужно удалить
-        target_type = None
+
         if has_income and has_expense:
-            # В строке и приход, и расход — спрашиваем пользователя
-            target_type = self._ask_what_to_delete(income_val_str, expense_val_str)
+            target_type = self._ask_what_to_delete(
+                self._format_money(income_amount),
+                self._format_money(expense_amount)
+            )
+
             if target_type is None:
                 return
         elif has_income:
-            target_type = 'income'
-        elif has_expense:
-            target_type = 'expense'
-        
-        # [ИЗМЕНЕНО] Ищем запись в БД по дате и значению
-        all_ops = cash_repo.get_all()
-        day_ops = [op for op in all_ops if op[1] == actual_date]
-        
-        target_op_id = None
-        target_desc = ""
-        
-        if target_type == 'income':
-            # Ищем запись, где income совпадает с выбранным значением
-            for op in day_ops:
-                op_income = op[2]
-                if op_income and abs(op_income - inc_float) < 0.01:
-                    target_op_id = op[0]
-                    target_desc = f"Приход: {income_val_str} руб."
-                    break
-        elif target_type == 'expense':
-            # Ищем запись, где expense совпадает с выбранным значением
-            for op in day_ops:
-                op_expense = op[3]
-                if op_expense and abs(op_expense - exp_float) < 0.01:
-                    target_op_id = op[0]
-                    target_desc = f"Расход: {expense_val_str} руб."
-                    break
-        
-        if not target_op_id:
-            self.show_error("Ошибка", "Не найдена запись для удаления")
-            return
-        
-        # Подтверждение
+            target_type = "income"
+        else:
+            target_type = "expense"
+
+        if target_type == "income":
+            target_op_id = income_op_id
+            target_amount = income_amount
+            target_desc = f"Приход: {self._format_money(target_amount)} руб."
+        else:
+            target_op_id = expense_op_id
+            target_amount = expense_amount
+            target_desc = f"Расход: {self._format_money(target_amount)} руб."
+
         if not self.ask_yes_no(
             "Подтверждение",
-            f"Удалить значение?\n\nДата: {actual_date}\n{target_desc}"
+            f"Удалить значение?\n\nДата: {date}\n{target_desc}"
         ):
             return
-        
-        # [ИЗМЕНЕНО] Вызываем clear_field, который теперь обнуляет только выбранное поле
+
         success, message = cash_repo.clear_field(target_op_id, target_type)
-        
+
         if success:
+            # [ИЗМЕНЕНО] После удаления очищаем только поля прихода/расхода,
+            # дата остаётся для удобства
+            self._clear_fields(keep_date=True)
             self.load_operations()
             self.show_info("Успех", message)
-            self._restore_window_state()
         else:
             self.show_error("Ошибка", message)
-            self._restore_window_state()
-            
-                
-    def _get_date_from_group(self, item_id):
-        children = self.tree.get_children()
-        idx = list(children).index(item_id)
-        for i in range(idx, -1, -1):
-            vals = self.tree.item(children[i], 'values')
-            if vals and vals[0] and vals[0] not in ('Итог', 'Оборот за день'):
-                return vals[0]
-        return None
-    
-    def _ask_what_to_delete(self, income_val_str, expense_val_str):
-        """Собственный диалог выбора — не трогаем, он на Toplevel"""
+
+    def _ask_what_to_delete(self, income_str, expense_str):
+        """Диалог выбора: приход или расход"""
         dialog = tk.Toplevel(self.window)
         dialog.title("Что удалить?")
-        dialog.configure(bg=COLORS['panel_bg'])
+        dialog.configure(bg=COLORS["panel_bg"])
         dialog.resizable(False, False)
         dialog.transient(self.window)
         dialog.grab_set()
-        
+
         dialog_width = 400
-        dialog_height = 260
-        root_window = self.window.winfo_toplevel()
-        root_window.update_idletasks()
-        root_x = root_window.winfo_rootx()
-        root_y = root_window.winfo_rooty()
-        root_w = root_window.winfo_width()
-        root_h = root_window.winfo_height()
+        dialog_height = 250
+
+        root_x = self.window.winfo_rootx()
+        root_y = self.window.winfo_rooty()
+        root_w = self.window.winfo_width()
+        root_h = self.window.winfo_height()
+
         x = root_x + (root_w - dialog_width) // 2
         y = root_y + (root_h - dialog_height) // 2
+
         dialog.geometry(f"{dialog_width}x{dialog_height}+{x}+{y}")
-        
-        result = {'choice': None}
-        
+
         tk.Label(
-            dialog, text="Что удалить?",
-            font=FONTS['section_title'], bg=COLORS['panel_bg'], fg=COLORS['title_text']
-        ).pack(pady=(15, 10))
-        
-        tk.Frame(dialog, height=2, bg=COLORS['button_primary']).pack(
-            fill=tk.X, padx=20, pady=(0, 10)
-        )
-        
-        info_frame = tk.Frame(dialog, bg=COLORS['panel_bg'])
-        info_frame.pack(fill=tk.X, padx=20, pady=(0, 10))
-        
-        def _add_info_row(label_text, value_text):
-            row = tk.Frame(info_frame, bg=COLORS['panel_bg'])
-            row.pack(fill=tk.X, pady=2)
-            tk.Label(
-                row, text=f"{label_text}:",
-                font=FONTS['field'], bg=COLORS['panel_bg'],
-                fg=COLORS['work_area_text'], width=12, anchor='w'
-            ).pack(side=tk.LEFT, padx=(0, 10))
-            tk.Label(
-                row, text=value_text,
-                font=FONTS['field'], bg=COLORS['panel_bg'],
-                fg=COLORS['title_text'], anchor='w'
-            ).pack(side=tk.LEFT, fill=tk.X, expand=True)
-        
-        _add_info_row("Приход", f"{income_val_str} руб.")
-        _add_info_row("Расход", f"{expense_val_str} руб.")
-        
-        tk.Frame(dialog, height=1, bg=COLORS['work_area_text']).pack(
-            fill=tk.X, padx=20, pady=10
-        )
-        
-        tk.Label(
-            dialog, text="Выберите, что нужно удалить:",
-            font=FONTS['menu'], bg=COLORS['panel_bg'], fg=COLORS['title_text']
-        ).pack(anchor='w', padx=20, pady=(0, 10))
-        
+            dialog,
+            text="В строке есть и приход, и расход.\nЧто удалить?",
+            font=FONTS["menu"],
+            bg=COLORS["panel_bg"],
+            fg=COLORS["title_text"],
+            justify="center"
+        ).pack(pady=(20, 15))
+
+        tk.Frame(
+            dialog,
+            height=2,
+            bg=COLORS["button_primary"]
+        ).pack(fill=tk.X, padx=20, pady=(0, 15))
+
+        result = {"choice": None}
+
         def on_income():
-            result['choice'] = 'income'
-            dialog.grab_release()
+            result["choice"] = "income"
+            try:
+                dialog.grab_release()
+            except tk.TclError:
+                pass
             dialog.destroy()
-        
+
         def on_expense():
-            result['choice'] = 'expense'
-            dialog.grab_release()
+            result["choice"] = "expense"
+            try:
+                dialog.grab_release()
+            except tk.TclError:
+                pass
             dialog.destroy()
-        
+
         def on_cancel():
-            result['choice'] = None
-            dialog.grab_release()
+            result["choice"] = None
+            try:
+                dialog.grab_release()
+            except tk.TclError:
+                pass
             dialog.destroy()
-        
-        btn_frame = tk.Frame(dialog, bg=COLORS['panel_bg'])
-        btn_frame.pack(fill=tk.X, padx=20, pady=(0, 15))
-        
+
+        btn_frame = tk.Frame(dialog, bg=COLORS["panel_bg"])
+        btn_frame.pack(fill=tk.X, padx=30, pady=(0, 10))
+
         income_btn = tk.Button(
-            btn_frame, text="Приход", font=FONTS['menu'], command=on_income,
-            bg=COLORS['button_primary'], fg=COLORS['button_text'],
-            relief=tk.FLAT, padx=15, pady=5, cursor='hand2'
+            btn_frame,
+            text=f"Приход: {income_str.strip()} руб.",
+            font=FONTS["menu"],
+            command=on_income,
+            bg="#27ae60",
+            fg=COLORS["button_text"],
+            relief=tk.FLAT,
+            padx=15,
+            pady=8,
+            cursor="hand2"
         )
-        income_btn.pack(side=tk.LEFT, padx=(0, 10))
-        income_btn.bind('<Enter>', lambda e: income_btn.config(bg=COLORS['button_primary_hover']))
-        income_btn.bind('<Leave>', lambda e: income_btn.config(bg=COLORS['button_primary']))
-        
+        income_btn.pack(fill=tk.X, pady=(0, 10))
+        income_btn.bind("<Enter>", lambda e: income_btn.config(bg="#229954"))
+        income_btn.bind("<Leave>", lambda e: income_btn.config(bg="#27ae60"))
+
         expense_btn = tk.Button(
-            btn_frame, text="Расход", font=FONTS['menu'], command=on_expense,
-            bg='#f39c12', fg=COLORS['button_text'],
-            relief=tk.FLAT, padx=15, pady=5, cursor='hand2'
+            btn_frame,
+            text=f"Расход: {expense_str.strip()} руб.",
+            font=FONTS["menu"],
+            command=on_expense,
+            bg="#e74c3c",
+            fg=COLORS["button_text"],
+            relief=tk.FLAT,
+            padx=15,
+            pady=8,
+            cursor="hand2"
         )
-        expense_btn.pack(side=tk.LEFT, padx=(0, 10))
-        expense_btn.bind('<Enter>', lambda e: expense_btn.config(bg='#d68910'))
-        expense_btn.bind('<Leave>', lambda e: expense_btn.config(bg='#f39c12'))
-        
+        expense_btn.pack(fill=tk.X, pady=(0, 10))
+        expense_btn.bind("<Enter>", lambda e: expense_btn.config(bg="#c0392b"))
+        expense_btn.bind("<Leave>", lambda e: expense_btn.config(bg="#e74c3c"))
+
         cancel_btn = tk.Button(
-            btn_frame, text="Отмена", font=FONTS['menu'], command=on_cancel,
-            bg=COLORS['button_settings'], fg=COLORS['button_text'],
-            relief=tk.FLAT, padx=15, pady=5, cursor='hand2'
+            btn_frame,
+            text="Отмена",
+            font=FONTS["menu"],
+            command=on_cancel,
+            bg=COLORS["button_settings"],
+            fg=COLORS["button_text"],
+            relief=tk.FLAT,
+            padx=15,
+            pady=5,
+            cursor="hand2"
         )
-        cancel_btn.pack(side=tk.RIGHT)
-        cancel_btn.bind('<Enter>', lambda e: cancel_btn.config(bg=COLORS['button_settings_hover']))
-        cancel_btn.bind('<Leave>', lambda e: cancel_btn.config(bg=COLORS['button_settings']))
-        
-        dialog.bind('<Escape>', lambda e: on_cancel())
+        cancel_btn.pack(fill=tk.X)
+        cancel_btn.bind(
+            "<Enter>",
+            lambda e: cancel_btn.config(bg=COLORS["button_settings_hover"])
+        )
+        cancel_btn.bind(
+            "<Leave>",
+            lambda e: cancel_btn.config(bg=COLORS["button_settings"])
+        )
+
+        dialog.protocol("WM_DELETE_WINDOW", on_cancel)
+        dialog.bind("<Escape>", lambda e: on_cancel())
+
         self.window.wait_window(dialog)
-        return result['choice']
+
+        return result["choice"]
+
+    # ======================================================================
+    # АВТООБНОВЛЕНИЕ
+    # ======================================================================
 
     def _on_auto_refresh(self):
-        """
-        Автообновление данных при изменении БД другим компьютером.
-        Вызывается таймером из BaseToplevelWindow каждые 3 секунды.
-        """
+        """Автообновление данных при изменении БД другим компьютером"""
         try:
             self.load_operations()
         except Exception as e:
